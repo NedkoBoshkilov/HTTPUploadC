@@ -1,11 +1,25 @@
 #include "HTTPFuncs.h"
 
+// TODO: REMOVE
 #include <string.h>
 
-const uint8_t delimiter[2] = {0x0D, 0x0A};
-const char headerNameValueDelimiter = ':';
+const char lineDelimiter[] = "\r\n";
 const char HTTPVersionSTR[] = "HTTP/1.";
 const char hostHeaderName[] = "Host";
+const uint8_t headerNameValueDelimiter = ':';
+
+const char boundaryDelimiter[] = "--";
+const char contentHeader1[] = "Content-Disposition: form-data; name=\"file\"; filename=\"";
+const char contentHeader2[] = "Content-Type: application/octet-stream";
+
+void copyString(uint8_t* dest, const char* src, uint32_t* destIdx)
+{
+	for(uint8_t i = 0; src[i] != '\0'; ++i)
+	{
+		dest[*destIdx] = src[i];
+		++(*destIdx);
+	}
+}
 
 uint8_t isWhitespace(char test)
 {
@@ -27,8 +41,8 @@ uint32_t nextLineStart(const uint8_t* buff, uint32_t start)
 	uint8_t found = 0;
 	while(!found)
 	{
-		if( (buff[result] == delimiter[1]) &&
-			(buff[result - 1] == delimiter[0]) )
+		if( (buff[result] == lineDelimiter[1]) &&
+			(buff[result - 1] == lineDelimiter[0]) )
 		{
 			found = 1;
 		}
@@ -64,46 +78,27 @@ int8_t buildRequest(const HTTPRequest* params, uint8_t* dest, uint32_t* requestS
 	
 	if(!dest)
 	{
-		return -1; //BAD DEST
+		return -2; //BAD DEST
 	}
 	
-	// SET METHOD
-	i = 0;
-	while(params->method[i] != '\0')
-	{
-		// CAST
-		dest[destIndex] = (uint8_t) (params->method[i]);
-		++i;
-		++destIndex;
-	}
+	// [method] [uri] HTTP/1.X\r\n
+	// Host:[host]\r\n
+	// [Name]:[value]\r\n
+	// \r\n
 	
-	// ADD SPACE
+	// SET FIRST LINE
+	copyString(dest, params->method, &destIndex);
+	
 	dest[destIndex] = ' ';
 	++destIndex;
 	
-	// SET URI
-	i = 0;
-	while(params->uri[i] != '\0')
-	{
-		// CAST
-		dest[destIndex] = (uint8_t) (params->uri[i]);
-		++i;
-		++destIndex;
-	}
+	copyString(dest, params->uri, &destIndex);
 	
-	// ADD SPACE
 	dest[destIndex] = ' ';
 	++destIndex;
 	
-	// SET VERSION
-	i = 0;
-	while(HTTPVersionSTR[i] != '\0')
-	{
-		// CAST
-		dest[destIndex] = (uint8_t) (HTTPVersionSTR[i]);
-		++i;
-		++destIndex;
-	}
+	copyString(dest, HTTPVersionSTR, &destIndex);
+	
 	if(params->isVersion11)
 	{
 		dest[destIndex] = '1';
@@ -113,104 +108,39 @@ int8_t buildRequest(const HTTPRequest* params, uint8_t* dest, uint32_t* requestS
 		dest[destIndex] = '0';
 	}
 	++destIndex;
-	
-	// NEW LINE
-	dest[destIndex] = delimiter[0];
-	++destIndex;
-	dest[destIndex] = delimiter[1];
-	++destIndex;
+		
+	copyString(dest, lineDelimiter, &destIndex);
 	
 	// SET HOST HEADER
-	i = 0;
-	while(hostHeaderName[i] != '\0')
-	{
-		// CAST
-		dest[destIndex] = (uint8_t) (hostHeaderName[i]);
-		++i;
-		++destIndex;
-	}
+	copyString(dest, hostHeaderName, &destIndex);
 	
 	// CAST
-	dest[destIndex] = (uint8_t) headerNameValueDelimiter;
+	dest[destIndex] = headerNameValueDelimiter;
 	++destIndex;
-	
-	i = 0;
-	while(params->host[i] != '\0')
-	{
-		// CAST
-		dest[destIndex] = (uint8_t) (params->host[i]);
-		++i;
-		++destIndex;
-	}
-	
-	// NEW LINE
-	dest[destIndex] = delimiter[0];
-	++destIndex;
-	dest[destIndex] = delimiter[1];
-	++destIndex;
+
+	copyString(dest, params->host, &destIndex);
+	copyString(dest, lineDelimiter, &destIndex);
 	
 	// SET OTHER HEADERS
 	for(uint8_t idxHeader = 0; idxHeader < params->headerCount; ++idxHeader)
 	{
 		if(!(params->headers))
 		{
-			return -1; //BAD HEADERS
+			return -1; //BAD PARAMS
 		}
 		
 		HTTPHeader curHeader = params->headers[idxHeader];
 		
-		// NAME
-		i = 0;
-		while(curHeader.name[i] != '\0')
-		{
-			// CAST
-			dest[destIndex] = (uint8_t) (curHeader.name[i]);
-			++i;
-			++destIndex;
-		}
+		copyString(dest, curHeader.name, &destIndex);
 		
-		// CAST
-		dest[destIndex] = (uint8_t) headerNameValueDelimiter;
+		dest[destIndex] = headerNameValueDelimiter;
 		++destIndex;
 		
-		// VALUE
-		i = 0;
-		while(curHeader.value[i] != '\0')
-		{
-			// CAST
-			dest[destIndex] = (uint8_t) (curHeader.value[i]);
-			++i;
-			++destIndex;
-		}
-		
-		// NEW LINE
-		dest[destIndex] = delimiter[0];
-		++destIndex;
-		dest[destIndex] = delimiter[1];
-		++destIndex;
+		copyString(dest, curHeader.value, &destIndex);
+		copyString(dest, lineDelimiter, &destIndex);
 	}
 
-	// NEW LINE
-	dest[destIndex] = delimiter[0];
-	++destIndex;
-	dest[destIndex] = delimiter[1];
-	++destIndex;
-	
-	// SET PAYLOAD
-	/*if(params->payloadSize != 0)
-	{
-		if(!(params->payload))
-		{
-			return -1; //BAD PAYLOAD
-		}
-		i = 0;
-		while(i < params->payloadSize)
-		{
-			dest[destIndex] = params->payload[i];
-			++i;
-			++destIndex;
-		}
-	}*/
+	copyString(dest, lineDelimiter, &destIndex);
 	
 	dest[destIndex] = '\0';
 	if(requestSize)
@@ -245,10 +175,10 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 			continue;
 		}		
 		
-		if( (response[i - 3] == delimiter[0]) &&
-			(response[i - 2] == delimiter[1]) &&
-			(response[i - 1] == delimiter[0]) &&
-			(response[i] == delimiter[1]) )
+		if( (response[i - 3] == lineDelimiter[0]) &&
+			(response[i - 2] == lineDelimiter[1]) &&
+			(response[i - 1] == lineDelimiter[0]) &&
+			(response[i] == lineDelimiter[1]) )
 		{
 			valid = 1;
 			break;
@@ -256,7 +186,7 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 	}
 	if( (!valid) || (i < 3) )
 	{
-		return -3; // BAD RESPONSE
+		return -1; // BAD RESPONSE
 	}
 	else
 	{
@@ -278,7 +208,7 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 	{
 		if(response[responseIndex] != HTTPVersionSTR[i])
 		{
-			return -4; // BAD RESPONSE
+			return -1; // BAD RESPONSE
 		}
 		++i;
 		++responseIndex;
@@ -319,10 +249,11 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 				++i;
 				++responseIndex;
 			}
+			
 			// Compare the names that we are looking for
 			for(i = 0; i < dest->headerCount; ++i)
 			{
-				// TODO: Remove STRCMP
+				// TODO: REMOVE STRCMP
 				if(0 == strcmp(dest->headers[i].name, name) )
 				{
 					do
@@ -331,7 +262,7 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 					}
 					while(isWhitespace(response[responseIndex]));
 					//Copy value
-					for(uint32_t idx = 0; response[responseIndex] != delimiter[0]; ++responseIndex)
+					for(uint32_t idx = 0; response[responseIndex] != lineDelimiter[0]; ++responseIndex)
 					{
 						dest->headers[i].value[idx] = response[responseIndex];
 						++idx;
@@ -344,6 +275,82 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 			lineLenght = nextLineStart(response, responseIndex) - responseIndex - 2;
 		}
 	}
+	
+	return 0;
+}
+
+int8_t buildUploadPayloadEncapsulation(const char* filename, const char* boundary, uint8_t* header, uint8_t* trailer, uint32_t* headerSize, uint32_t* trailerSize)
+{
+	if(!filename)
+	{
+		return -1; //BAD FILENAME
+	}
+	
+	if( (!header) || (!trailer) )
+	{
+		return -2; //BAD DEST
+	}
+	
+	// --[boundary]\r\n
+	// Content-Disposition: form-data; name=\"file\"; filename=\"[filename]\"\r\n
+	// Content-Type: application/octet-stream\r\n
+	// \r\n
+	// [data]
+	// \r\n--[boundary]--\r\n
+	
+	uint8_t i;
+	
+	// HEADER
+	uint32_t headerIndex = 0;
+	copyString(header, boundaryDelimiter, &headerIndex);
+	
+	// TRAILER
+	uint32_t trailerIndex = 0;
+	copyString(trailer, lineDelimiter, &trailerIndex);
+	copyString(trailer, boundaryDelimiter, &trailerIndex);
+	
+	// COPY STRING INTO BOTH HEADER AND TRAILER
+	for(i = 0; boundary[i] != '\0'; ++i)
+	{
+		header[headerIndex] = boundary[i];
+		++headerIndex;
+		trailer[trailerIndex] = boundary[i];
+		++trailerIndex;
+	}
+	
+	// TRAILER
+	copyString(trailer, boundaryDelimiter, &trailerIndex);
+	copyString(trailer, lineDelimiter, &trailerIndex);
+	
+	trailer[trailerIndex] = '\0';
+	if(trailerSize)
+	{
+		*trailerSize = trailerIndex;
+	}
+	// TRAILER END
+	
+	
+	// HEADER
+	copyString(header, lineDelimiter, &headerIndex);	
+	
+	
+	copyString(header, contentHeader1, &headerIndex);
+	copyString(header, filename, &headerIndex);
+	
+	header[headerIndex] = '"';
+	++headerIndex;
+	
+	copyString(header, lineDelimiter, &headerIndex);
+	copyString(header, contentHeader2, &headerIndex);
+	copyString(header, lineDelimiter, &headerIndex);
+	copyString(header, lineDelimiter, &headerIndex);
+	
+	header[headerIndex] = '\0';
+	if(headerSize)
+	{
+		*headerSize = headerIndex;
+	}
+	// HEADER END
 	
 	return 0;
 }

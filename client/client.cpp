@@ -34,48 +34,27 @@ int main(int argc, char** argv)
 	file.seekg(0, file.beg);
 
 	char boundary[] = "LOL";
-	char newLine[] = "\r\n";
-	char boundaryDelimiter[] = "--";
 	
-	char contentHeader[1024] = {0};
-	strcpy(contentHeader, boundaryDelimiter);
-	strcat(contentHeader, boundary);
-	strcat(contentHeader, newLine);
-	strcat(contentHeader, "Content-Disposition: form-data; name=\"file\"; filename=\"");
-	strcat(contentHeader, filename.c_str());
-	strcat(contentHeader, "\"");
-	strcat(contentHeader, newLine);
-	strcat(contentHeader, "Content-Type: image/png");
-	strcat(contentHeader, newLine);
-	strcat(contentHeader, newLine);
-	
-	cout << "Content Header: " << contentHeader << endl;
-	
-	char contentTrailer[1024] = {0};
-	strcpy(contentTrailer, newLine);
-	strcat(contentTrailer, boundaryDelimiter);
-	strcat(contentTrailer, boundary);
-	strcat(contentTrailer, boundaryDelimiter);
-	strcat(contentTrailer, newLine);
-	
-	cout << "Content Trailer: " << contentTrailer << endl;
+	uint8_t contentHeader[1024] = {0};
+	uint8_t contentTrailer[1024] = {0};
+	uint32_t contentHeaderSize = 0;
+	uint32_t contentTrailerSize = 0;
+	buildUploadPayloadEncapsulation(argv[1], boundary, contentHeader, contentTrailer, &contentHeaderSize, &contentTrailerSize);
 
 	HTTPRequest request;
-	HTTPHeader header[5];
-	char buff[10][256] = {0,0};
+	HTTPHeader header[4];
+	char buff[8][256] = {0};
 	strcpy(buff[0], "Referer");
 	strcpy(buff[1], "http://127.0.0.1:8000/");
 	strcpy(buff[2], "Content-Type");
 	strcpy(buff[3], "multipart/form-data; boundary=LOL");
 	strcpy(buff[4], "Content-Length");
-	sprintf(buff[5], "%lu", size + strlen(contentHeader) + strlen(contentTrailer) ); //TODO: Remove
+	sprintf(buff[5], "%u", size + contentHeaderSize + contentTrailerSize ); // TODO: REMOVE?
 	strcpy(buff[6], "Connection");
 	strcpy(buff[7], "keep-alive");
-	strcpy(buff[8], "User-Agent");
-	strcpy(buff[9], "fileUploader");
 	
 	
-	request.headerCount = 5;
+	request.headerCount = 4;
 	request.headers = header;
 	header[0].name = buff[0];
 	header[0].value = buff[1];
@@ -85,8 +64,6 @@ int main(int argc, char** argv)
 	header[2].value = buff[5];
 	header[3].name = buff[6];
 	header[3].value = buff[7];
-	header[4].name = buff[8];
-	header[4].value = buff[9];
 		
 	char host[] = "127.0.0.1:8000";
 	//char uri[] = "http://127.0.0.1:8000/";
@@ -96,7 +73,7 @@ int main(int argc, char** argv)
 	request.isVersion11 = 1;
 	strcpy(request.method, HTTPMethods[HTTP_REQUEST_POST]);
 	
-	// SOCKET STUFF
+	// SOCKET PREPARATIONS
 	int sd, ret;
     struct sockaddr_in server;
     struct in_addr ipv4addr;
@@ -117,22 +94,55 @@ int main(int argc, char** argv)
     uint8_t reqStr[1024];
     uint32_t reqSize;
     buildRequest(&request, reqStr, &reqSize);
-    cout << "HTTP Header: Written " << write(sd, (void*)reqStr, reqSize) << " bytes out of " << reqSize << endl;
     
-    cout << "Content Header: Written " << write(sd, contentHeader, strlen(contentHeader)) << " bytes out of " << strlen(contentHeader) << endl;
+    uint32_t written = write(sd, (void*)reqStr, reqSize);
+    //cout << "HTTP Header: Written " << written << " bytes out of " << reqSize << endl;
+    
+    written = write(sd, contentHeader, contentHeaderSize);
+    //cout << "Content Header: Written " << written << " bytes out of " << contentHeaderSize << endl;
     
     uint8_t fileBUFF[size];
     file.read((char*) fileBUFF, size);
-    cout << "Data: Written " << write(sd, fileBUFF, size) << " bytes out of " << size << endl;
     
-    cout << "Content Trailer: Written " << write(sd, contentTrailer, strlen(contentTrailer)) << " bytes out of " << strlen(contentTrailer) << endl;
+    written = write(sd, fileBUFF, size);
+    //cout << "Data: Written " << written << " bytes out of " << size << endl;
     
+    written = write(sd, contentTrailer, contentTrailerSize);
+    //cout << "Content Trailer: Written " << written << " bytes out of " << contentTrailerSize << endl;
+    
+    cout << "Press Enter to view response";
     getchar();
     
     // RECV
     char respBuff[2048] = {0};
     read(sd, respBuff, 2048);
-    cout << "*** RESPONSE ***" << endl << respBuff << endl;
+    //cout << "*** RESPONSE ***" << endl << respBuff << endl;
     
+    char responseBuffs[2][256] = {0};
+    HTTPHeader responseHeaders;
+    HTTPResponse response;
+    
+    strcpy(responseBuffs[0], "Content-Length");
+    
+    responseHeaders.name = responseBuffs[0];
+    responseHeaders.value = responseBuffs[1];
+    
+    response.headerCount = 1;
+    response.headers = &responseHeaders;
+    
+    decodeResponse( (const uint8_t*) respBuff, &response, NULL);
+    
+    cout << "--- RESPONSE ---" << endl;
+    cout << "Code: " << response.code << endl;
+    cout << responseHeaders.name << ": " << responseHeaders.value << endl;
+    
+    /*
+    for(uint8_t i = 0; i < 0; ++i)
+    {
+		cout << responseHeaders[i].name << " - " << responseHeaders[i].value << endl;
+	}
+	*/
+    
+    close(sd);
     return 0;
 }
