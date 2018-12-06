@@ -1,2 +1,2 @@
-all: HTTPDefines.h HTTPFuncs.h HTTPFuncs.c client.cpp
-	g++ -o upload HTTPFuncs.c client.cpp
+all: HTTPDefines.h HTTPFuncs.h HTTPFuncs.c client.c
+	gcc -o upload HTTPFuncs.c client.c

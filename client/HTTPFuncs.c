@@ -114,7 +114,6 @@ int8_t buildRequest(const HTTPRequest* params, uint8_t* dest, uint32_t* requestS
 	// SET HOST HEADER
 	copyString(dest, hostHeaderName, &destIndex);
 	
-	// CAST
 	dest[destIndex] = headerNameValueDelimiter;
 	++destIndex;
 
@@ -129,8 +128,7 @@ int8_t buildRequest(const HTTPRequest* params, uint8_t* dest, uint32_t* requestS
 			return -1; //BAD PARAMS
 		}
 		
-		HTTPHeader curHeader = params->headers[idxHeader];
-		
+		HTTPHeader curHeader = (params->headers)[idxHeader];
 		copyString(dest, curHeader.name, &destIndex);
 		
 		dest[destIndex] = headerNameValueDelimiter;
