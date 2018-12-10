@@ -14,7 +14,8 @@ const char contentHeader2[] = "Content-Type: application/octet-stream";
 
 void copyString(uint8_t* dest, const char* src, uint32_t* destIdx)
 {
-	for(uint8_t i = 0; src[i] != '\0'; ++i)
+	uint32_t i;
+	for(i = 0; src[i] != '\0'; ++i)
 	{
 		dest[*destIdx] = src[i];
 		++(*destIdx);
@@ -24,8 +25,9 @@ void copyString(uint8_t* dest, const char* src, uint32_t* destIdx)
 uint8_t isWhitespace(char test)
 {
 	uint8_t result = 0;
+	uint32_t i;
 	const char whitespace[] = {' ', '\t', '\v', '\f'};
-	for(uint8_t i = 0; i < 4; ++i)
+	for(i = 0; i < 4; ++i)
 	{
 		if(whitespace[i] == test)
 		{
@@ -68,8 +70,14 @@ uint32_t nextDelimiter(const uint8_t* buff, uint32_t start)
 
 int8_t buildRequest(const HTTPRequest* params, uint8_t* dest, uint32_t* requestSize)
 {
+	// [method] [uri] HTTP/1.X\r\n
+	// Host:[host]\r\n
+	// [Name]:[value]\r\n
+	// \r\n
+	
 	uint32_t destIndex = 0;
 	uint32_t i = 0;
+	uint8_t idxHeader = 0;
 	
 	if(!params)
 	{
@@ -80,11 +88,6 @@ int8_t buildRequest(const HTTPRequest* params, uint8_t* dest, uint32_t* requestS
 	{
 		return -2; //BAD DEST
 	}
-	
-	// [method] [uri] HTTP/1.X\r\n
-	// Host:[host]\r\n
-	// [Name]:[value]\r\n
-	// \r\n
 	
 	// SET FIRST LINE
 	copyString(dest, params->method, &destIndex);
@@ -121,7 +124,7 @@ int8_t buildRequest(const HTTPRequest* params, uint8_t* dest, uint32_t* requestS
 	copyString(dest, lineDelimiter, &destIndex);
 	
 	// SET OTHER HEADERS
-	for(uint8_t idxHeader = 0; idxHeader < params->headerCount; ++idxHeader)
+	for(idxHeader = 0; idxHeader < params->headerCount; ++idxHeader)
 	{
 		if(!(params->headers))
 		{
@@ -152,7 +155,11 @@ int8_t buildRequest(const HTTPRequest* params, uint8_t* dest, uint32_t* requestS
 int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* headersLength)
 {
 	uint32_t responseIndex = 0;
-	uint32_t i;
+	uint32_t i = 0;
+	uint8_t valid = 0;
+	uint32_t lineLenght = 0;
+	char name[256] = {0};
+	uint32_t idx = 0;
 	
 	if(!response)
 	{
@@ -165,7 +172,6 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 	}
 	
 	// Valid Response?
-	uint8_t valid = 0;
 	for(i = 0; response[i] != '\0'; ++i)
 	{
 		if(i < 3)
@@ -235,10 +241,12 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 	if(dest->headerCount)
 	{
 		// FIND LINE LENGTH
-		uint32_t lineLenght = nextLineStart(response, responseIndex) - responseIndex - 2;
+		lineLenght = nextLineStart(response, responseIndex) - responseIndex - 2;
 		while(lineLenght)
 		{
-			char name[256] = {0};
+			
+			// HELLP
+			memset(name, 0, 256);
 			i = 0;
 			// Find the name of the header
 			while(response[responseIndex] != headerNameValueDelimiter)
@@ -259,12 +267,18 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 						++responseIndex;
 					}
 					while(isWhitespace(response[responseIndex]));
+					
 					//Copy value
-					for(uint32_t idx = 0; response[responseIndex] != lineDelimiter[0]; ++responseIndex)
+					idx = 0;
+					
+					while(response[responseIndex] != lineDelimiter[0])
 					{
 						dest->headers[i].value[idx] = response[responseIndex];
 						++idx;
+						++responseIndex;
 					}
+					
+					dest->headers[i].value[idx] = '\0';
 					break;
 				}
 			}
@@ -279,6 +293,17 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 
 int8_t buildUploadPayloadEncapsulation(const char* filename, const char* boundary, uint8_t* header, uint8_t* trailer, uint32_t* headerSize, uint32_t* trailerSize)
 {
+	// --[boundary]\r\n
+	// Content-Disposition: form-data; name=\"file\"; filename=\"[filename]\"\r\n
+	// Content-Type: application/octet-stream\r\n
+	// \r\n
+	// [data]
+	// \r\n--[boundary]--\r\n
+	
+	uint16_t i;
+	uint32_t headerIndex = 0;
+	uint32_t trailerIndex = 0;
+	
 	if(!filename)
 	{
 		return -1; //BAD FILENAME
@@ -289,23 +314,13 @@ int8_t buildUploadPayloadEncapsulation(const char* filename, const char* boundar
 		return -2; //BAD DEST
 	}
 	
-	// --[boundary]\r\n
-	// Content-Disposition: form-data; name=\"file\"; filename=\"[filename]\"\r\n
-	// Content-Type: application/octet-stream\r\n
-	// \r\n
-	// [data]
-	// \r\n--[boundary]--\r\n
-	
-	uint8_t i;
-	
 	// HEADER
-	uint32_t headerIndex = 0;
 	copyString(header, boundaryDelimiter, &headerIndex);
 	
 	// TRAILER
-	uint32_t trailerIndex = 0;
 	copyString(trailer, lineDelimiter, &trailerIndex);
 	copyString(trailer, boundaryDelimiter, &trailerIndex);
+	
 	
 	// COPY STRING INTO BOTH HEADER AND TRAILER
 	for(i = 0; boundary[i] != '\0'; ++i)
@@ -327,11 +342,8 @@ int8_t buildUploadPayloadEncapsulation(const char* filename, const char* boundar
 	}
 	// TRAILER END
 	
-	
 	// HEADER
-	copyString(header, lineDelimiter, &headerIndex);	
-	
-	
+	copyString(header, lineDelimiter, &headerIndex);
 	copyString(header, contentHeader1, &headerIndex);
 	copyString(header, filename, &headerIndex);
 	
