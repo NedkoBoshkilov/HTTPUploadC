@@ -9,8 +9,9 @@ const char hostHeaderName[] = "Host";
 const uint8_t headerNameValueDelimiter = ':';
 
 const char boundaryDelimiter[] = "--";
-const char contentHeader1[] = "Content-Disposition: form-data; name=\"file\"; filename=\"";
-const char contentHeader2[] = "Content-Type: application/octet-stream";
+const char contentHeader1[] = "Content-Disposition: form-data; name=\"";
+const char contentHeader2[] = "\"; filename=\"";
+const char contentHeader3[] = "Content-Type: application/octet-stream";
 
 void copyString(uint8_t* dest, const char* src, uint32_t* destIdx)
 {
@@ -291,7 +292,7 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 	return 0;
 }
 
-int8_t buildUploadPayloadEncapsulation(const char* filename, const char* boundary, uint8_t* header, uint8_t* trailer, uint32_t* headerSize, uint32_t* trailerSize)
+int8_t buildUploadPayloadEncapsulation(const char* filename, const char* formName, const char* boundary, uint8_t* header, uint8_t* trailer, uint32_t* headerSize, uint32_t* trailerSize)
 {
 	// --[boundary]\r\n
 	// Content-Disposition: form-data; name=\"file\"; filename=\"[filename]\"\r\n
@@ -345,13 +346,15 @@ int8_t buildUploadPayloadEncapsulation(const char* filename, const char* boundar
 	// HEADER
 	copyString(header, lineDelimiter, &headerIndex);
 	copyString(header, contentHeader1, &headerIndex);
+	copyString(header, formName, &headerIndex);
+	copyString(header, contentHeader2, &headerIndex);
 	copyString(header, filename, &headerIndex);
 	
 	header[headerIndex] = '"';
 	++headerIndex;
 	
 	copyString(header, lineDelimiter, &headerIndex);
-	copyString(header, contentHeader2, &headerIndex);
+	copyString(header, contentHeader3, &headerIndex);
 	copyString(header, lineDelimiter, &headerIndex);
 	copyString(header, lineDelimiter, &headerIndex);
 	
@@ -359,6 +362,95 @@ int8_t buildUploadPayloadEncapsulation(const char* filename, const char* boundar
 	if(headerSize)
 	{
 		*headerSize = headerIndex;
+	}
+	// HEADER END
+	
+	return 0;
+}
+
+int8_t buildUploadPayloadHeader(const char* filename, const char* formName, const char* boundary, uint8_t* header, uint32_t* headerSize)
+{
+	// --[boundary]\r\n
+	// Content-Disposition: form-data; name=\"[formName]\"; filename=\"[filename]\"\r\n
+	// Content-Type: application/octet-stream\r\n
+	// \r\n
+	
+	uint16_t i;
+	uint32_t headerIndex = 0;
+	
+	if(!filename)
+	{
+		return -1; //BAD FILENAME
+	}
+
+	if(!formName)
+	{
+		return -1; //BAD FORMNAME
+	}
+
+	if(!boundary)
+	{
+		return -1; //BAD BOUNDARY
+	}
+	
+	if(!header)
+	{
+		return -1; //BAD DEST
+	}
+	
+	copyString(header, boundaryDelimiter, &headerIndex);
+	copyString(header, boundary, &headerIndex);
+	copyString(header, lineDelimiter, &headerIndex);
+	copyString(header, contentHeader1, &headerIndex);
+	copyString(header, formName, &headerIndex);
+	copyString(header, contentHeader2, &headerIndex);
+	copyString(header, filename, &headerIndex);
+	
+	header[headerIndex] = '"';
+	++headerIndex;
+	
+	copyString(header, lineDelimiter, &headerIndex);
+	copyString(header, contentHeader3, &headerIndex);
+	copyString(header, lineDelimiter, &headerIndex);
+	copyString(header, lineDelimiter, &headerIndex);
+	
+	header[headerIndex] = '\0';
+	if(headerSize)
+	{
+		*headerSize = headerIndex;
+	}
+	// HEADER END
+	
+	return 0;
+}
+
+int8_t buildUploadPayloadTrailer(const char* boundary, uint8_t* trailer, uint32_t* trailerSize)
+{
+	// \r\n--[boundary]--\r\n
+	
+	uint16_t i;
+	uint32_t trailerIndex = 0;
+	
+	if(!boundary)
+	{
+		return -1; //BAD FILENAME
+	}
+	
+	if(!trailer)
+	{
+		return -1; //BAD DEST
+	}
+	
+	copyString(trailer, lineDelimiter, &trailerIndex);
+	copyString(trailer, boundaryDelimiter, &trailerIndex);
+	copyString(trailer, boundary, &trailerIndex);
+	copyString(trailer, boundaryDelimiter, &trailerIndex);
+	copyString(trailer, lineDelimiter, &trailerIndex);
+	
+	trailer[trailerIndex] = '\0';
+	if(trailerSize)
+	{
+		*trailerSize = trailerIndex;
 	}
 	// HEADER END
 	

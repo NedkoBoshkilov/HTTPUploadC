@@ -13,8 +13,8 @@ typedef struct HTTPRequest
 {
 	char method[8];
 	uint8_t isVersion11;
-	char* uri;
-	char* host;
+	const char* uri;
+	const char* host;
 	uint8_t headerCount;
 	HTTPHeader* headers;
 } HTTPRequest;

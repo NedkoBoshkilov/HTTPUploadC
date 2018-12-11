@@ -1,2 +1,2 @@
-all: HTTPDefines.h HTTPFuncs.h HTTPFuncs.c client.c
-	gcc -o upload HTTPFuncs.c client.c
+all: http_uploader.c comms_posix.c HTTPFuncs.c client.c
+	gcc http_uploader.c comms_posix.c HTTPFuncs.c client.c -o upload

@@ -22,6 +22,10 @@ int8_t decodeResponse(const uint8_t* response, HTTPResponse* dest, uint32_t* hea
 // trailer - content trailer string will be output
 // dest1Size - length of the header string - can be NULL
 // dest1Size - length of the trailer string - can be NULL
-int8_t buildUploadPayloadEncapsulation(const char* filename, const char* boundary, uint8_t* header, uint8_t* trailer, uint32_t* headerSize, uint32_t* trailerSize);
+int8_t buildUploadPayloadEncapsulation(const char* filename, const char* formName, const char* boundary, uint8_t* header, uint8_t* trailer, uint32_t* headerSize, uint32_t* trailerSize);
+
+int8_t buildUploadPayloadHeader(const char* filename, const char* formName, const char* boundary, uint8_t* header, uint32_t* headerSize);
+
+int8_t buildUploadPayloadTrailer(const char* boundary, uint8_t* trailer, uint32_t* trailerSize);
 
 #endif //HTTP_FUNCTIONS_H_
