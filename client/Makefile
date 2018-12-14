@@ -1,2 +1,2 @@
-all: http_uploader.c comms_posix.c HTTPFuncs.c client.c
-	gcc http_uploader.c comms_posix.c HTTPFuncs.c client.c -o upload
+all: http_uploader.c comms_posix.c http_funcs.c client.c
+	gcc http_uploader.c comms_posix.c http_funcs.c client.c -o upload

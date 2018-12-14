@@ -1,64 +1,61 @@
-#include "comms.h"
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+
 #include <unistd.h>
 
-int openSocket()
+#include "comms.h"
+
+int
+open_socket()
 {
-	int result = 0;
-	int errorValue = 0;
-    
-    result = socket(AF_INET, SOCK_STREAM, 0);
-	
+	int result;
+	result = socket(AF_INET, SOCK_STREAM, 0);
 	return result;
 }
 
-int connectToAddr(int socket, const char* host, uint16_t port)
+int
+connect_to_addr(int socket, const char *host, uint16_t port)
 {
-	int result = 0;
-	struct sockaddr_in serverAddress;
-	struct in_addr ipv4Addr;
+	int result;
+	struct in_addr ipv4_addr;
+	struct sockaddr_in server_address;
 
-	result = inet_aton(host, &ipv4Addr);
-	if(result != 1)
+	result = inet_aton(host, &ipv4_addr);
+	if (1 != result)
 	{
 		return -1;
 	}
 
-    serverAddress.sin_family = AF_INET;
-	serverAddress.sin_addr.s_addr = ipv4Addr.s_addr;
-    serverAddress.sin_port = htons(port);
+	server_address.sin_family = AF_INET;
+	server_address.sin_addr.s_addr = ipv4_addr.s_addr;
+	server_address.sin_port = htons(port);
 
-	result = connect(socket, (const struct sockaddr*) &serverAddress, sizeof(serverAddress));
-	
+	result = connect(socket, (const struct sockaddr*) &server_address, sizeof(server_address));
+
 	return result;
 }
 
-int closeSocket(int socket)
+int
+close_socket(int socket)
 {
-	int result = 0;
-	
+	int result;
 	result = close(socket);
-	
 	return result;
 }
 
-int writeData(int dest, void* buffer, uint32_t size)
+int
+write_data(int dest, void *buffer, uint32_t size)
 {
-	int result = 0;
-	
+	int result;
 	result = write(dest, buffer, size);
-	
 	return result;
 }
 
-int readData(int src, void* buffer, uint32_t size)
+int
+read_data(int src, void *buffer, uint32_t size)
 {
-	int result = 0;
-	
+	int result;
 	result = read(src, buffer, size);
-	
 	return result;
 }

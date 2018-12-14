@@ -1,44 +1,64 @@
-#include "comms.h"
-#include "http_uploader.h"
-#include "HTTPFuncs.h"
-#include <stdint.h>
-#include <limits.h>
-
 #include <sys/types.h>
 #include <sys/stat.h>
+
 #include <fcntl.h>
+#include <limits.h>
+#include <stdint.h>
+#include <string.h>
 #include <unistd.h>
 
-// STRLEN
-#include <string.h>
+#include "comms.h"
+#include "http_funcs.h"
+#include "http_uploader.h"
 
+/*
+ * These define the type of generated boundary.
+ * With BOUNDARY_DASH_COUNT = 8
+ * and BOUNDARY_HEX_COUNT = 16
+ * it looks like this:
+ * --------0123456789ABCDEF
+ */
 #define BOUNDARY_DASH_COUNT 16
 #define BOUNDARY_HEX_COUNT 16
 
+/* Defines the size of the chunks for transfering the file*/
 #define BUFFER_SIZE 1024
 
-static uint32_t currentNumber;
-static uint32_t multiplier;
-static uint32_t adder;
+/* 
+ * TODO: FIND A PROPER DEFINITION
+ * Max length of a filename
+ */
+#define MAX_FILENAME_LENGTH 255
 
-static uint32_t getContentHeaderSize(uint32_t filenameLength, uint32_t formNameLength)
+/* The following 3 variables hold the parameters for the RNG */
+static uint32_t current_number;
+static uint32_t multiplicative_part;
+static uint32_t additive_part;
+
+static uint32_t
+get_content_header_size(uint32_t filename_length, uint32_t form_name_length)
 {
-	return 100 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + filenameLength + formNameLength;
+	return 100 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + filename_length + form_name_length;
 }
 
-static uint32_t getContentTrailerSize()
+static uint32_t
+get_content_trailer_size()
 {
 	return 8 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT;
 }
 
-static void generateBoundary(char* dest)
+static int
+generate_boundary(char *dest)
 {
-	int i, j, compare;
-	const int fullRounds = BOUNDARY_HEX_COUNT / 8;
-	const int remainder = BOUNDARY_HEX_COUNT % 8;
-	uint32_t randomNumber;
-	uint32_t mask = 0x0000000F;
 	const char dash = '-';
+	int idx;
+	const int full_rounds = BOUNDARY_HEX_COUNT / 8;
+	const int round_filler = BOUNDARY_HEX_COUNT % 8;
+	int compare;
+	int i;
+	uint32_t random_number;
+	uint32_t mask = 0x0000000F;
+
 	const char hex[] =
 	{
 		'0', '1', '2', '3',
@@ -46,65 +66,86 @@ static void generateBoundary(char* dest)
 		'8', '9', 'A', 'B',
 		'C', 'D', 'E', 'F',
 	};
-	
-	// ADD DASHES
-	for(i = 0; i < BOUNDARY_DASH_COUNT; ++i)
+
+	if (NULL == dest)
 	{
-		dest[i] = dash;
+		return -1;
 	}
 	
-	// ADD RANDOM HEX SYMBOLS
-	for(i = 0; i < fullRounds + 1; ++i)
+	/* Add dashes */
+	for (idx = 0; idx < BOUNDARY_DASH_COUNT; ++idx)
 	{
-		if(i < fullRounds)
+		dest[idx] = dash;
+	}
+	
+	/* Add random hex symbols */
+	for (idx = 0; idx < full_rounds + 1; ++idx)
+	{
+		if (idx < full_rounds)
 		{
 			compare = 8;
 		}
 		else
 		{
-			compare = remainder;
+			compare = round_filler;
 		}
-		randomNumber = generateNumber();
+		random_number = generate_number();
 
-		for(j = 0; j < compare; ++j)
+		for (i = 0; i < compare; ++i)
 		{
-			dest[i * 8 + j + BOUNDARY_DASH_COUNT] = hex[randomNumber & mask];
-			randomNumber >>= 4;
+			dest[idx * 8 + i + BOUNDARY_DASH_COUNT] = hex[random_number & mask];
+			random_number >>= 4;
 		}
 	}
 	
-	// NULL TERMINATION
-	dest[BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT] = '\0';	
+	/* NULL termination */
+	dest[BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT] = '\0';
+
+	return 0;
 }
 
-static void getFilenameFromPath(char* filename, const char* filepath)
+static int
+get_filename_from_path(char *filename, const char *filepath)
 {
+	int start;
+	int idx;
 	const char delimiters[2] = {'/', '\\'};
-	int start, end, i;
-	start = 0;
-	for(end = 0; filepath[end] != '\0'; ++end)
+
+	if (NULL == filename)
 	{
-		if( (filepath[end] == delimiters[0]) || (filepath[end] == delimiters[1]) )
+		return -1;
+	}
+
+	if (NULL == filepath)
+	{
+		return -1;
+	}
+
+	/* Find the starting position of the filename */
+	start = 0;
+	for (idx = 0; filepath[idx] != '\0'; ++idx)
+	{
+		if( (filepath[idx] == delimiters[0]) || (filepath[idx] == delimiters[1]) )
 		{
-			start = end + 1;
+			start = idx + 1;
 		}
 	}
 
-	for(i = 0; i < end - start; ++i)
-	{
-		filename[i] = filepath[i + start];
-	}
+	strcpy(filename, &(filepath[start]));
+
+	return 0;
 }
 
-static int getFileSize(int fd)
+static int
+get_file_size(int fd)
 {
 	int result = 0;
 
 	result = lseek(fd, 0, SEEK_END);
 
-	if(result)
+	if (0 != result)
 	{
-		if( 0 != lseek(fd, 0, SEEK_SET) )
+		if (0 != lseek(fd, 0, SEEK_SET))
 		{
 			result = -1;
 		}
@@ -113,214 +154,216 @@ static int getFileSize(int fd)
 	return result;
 }
 
-static int buildFullHost(char* fullHost, const char* host, uint16_t port)
+static int
+build_full_host(char *full_host, const char *host, uint16_t port)
 {
-	int i = 0;
-	int idx = 0;
-	int divisor = 0;
+	int idx;
+	int divisor;
 
-	// Copy Host
-	for(i = 0; host[i] != '\0'; ++i)
-	{
-		if(i > 14)
-		{
-			return -1;
-		}
-
-		fullHost[idx] = host[i];
-		++idx;
-	}
-
-	fullHost[idx] = ':';
-	++idx;
-
-	// Put port in
-	divisor = 10000;
-	while( !(port/divisor) )
-	{
-		divisor /= 10;
-	}
-
-	while(divisor != 0)
-	{
-		fullHost[idx] = '0' + port / divisor;
-		++idx;
-		port = port % divisor;
-		divisor /= 10;
-	}
-	fullHost[idx] = '\0';
-
-	return 0;
-}
-
-static int generateAndSendRequest(int socket, const char* host, uint16_t port, const char* uri, uint32_t uriLength, uint8_t version, const char* boundary, uint32_t contentLenght)
-{
-	int result = 0;
-
-	int idx = 0;
-	uint32_t divisor = 0;
-	uint32_t i = 0;
-
-	uint8_t request[159 + 2 * uriLength + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1];
-	uint32_t requestSize = 0;
-	HTTPRequest requestParams;
-	HTTPHeader headers[4];
-
-	char fullHost[22] = {0};
-	char referer[8] = "Referer";
-	char refererValue[21 + uriLength + 1];
-	char type[13] = "Content-Type";
-	char typeValue[30 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1] = "multipart/form-data; boundary=";
-	char length[15] = "Content-Length";
-	// 2^32 is 10 Digits
-	char lengthValue[11] = {0};
-	char conn[11] = "Connection";
-	char connValue[11] = "keep-alive";
-
-	// Create fullHost
-	if( buildFullHost(fullHost, host, port) )
+	if (NULL == full_host)
 	{
 		return -1;
 	}
 
-	// Fill refererValue
-	idx = 0;
-	for(i = 0; fullHost[i] != '\0'; ++i)
+	if (NULL == host)
 	{
-		refererValue[idx] = fullHost[i];
+		return -1;
+	}
+
+	/* Copy Host */
+	strcpy(full_host, host);
+	idx = strlen(full_host);
+
+	full_host[idx] = ':';
+	++idx;
+
+	/* Put port in */
+	divisor = 10000;
+	while (0 == (port / divisor))
+	{
+		divisor /= 10;
+	}
+
+	while (0 != divisor)
+	{
+		full_host[idx] = '0' + port / divisor;
 		++idx;
+		port = port % divisor;
+		divisor /= 10;
 	}
+	full_host[idx] = '\0';
 
-	for(i = 0; uri[i] != '\0'; ++i)
+	return 0;
+}
+
+static int
+generate_and_send_request(int socket, const char *host, uint16_t port, const char *uri, uint32_t uri_length, uint8_t version, const char *boundary, uint32_t content_length)
+{
+	char full_host[22];
+	char referer_name[8];
+	char referer_value[21 + uri_length + 1];
+	char type_name[13];
+	char type_value[30 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1];
+	char length_name[15];
+	char length_value[11]; /* 2^32 is 10 Digits */
+	uint32_t divisor;
+	int idx;
+	char conn_name[11];
+	char conn_value[11];
+	struct http_header headers[4];
+	struct http_request request_params;
+	char request[159 + 2 * uri_length + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1];
+	uint32_t request_size;
+	int result;
+
+	if (NULL == host)
 	{
-		refererValue[idx] = uri[i];
-		++idx;
+		return -1;
 	}
-	refererValue[idx] = '\0';
 
-	// Add Boundary to typeValue
-	for(i = 0; i < BOUNDARY_DASH_COUNT+BOUNDARY_HEX_COUNT; ++i)
+	if (NULL == uri)
 	{
-		typeValue[30+i] = boundary[i];
+		return -1;
 	}
 
-	// Fill lengthValue
+	if (NULL == boundary)
+	{
+		return -1;
+	}
+
+	/* Create fullHost */
+	if (0 != build_full_host(full_host, host, port))
+	{
+		return -1;
+	}
+
+	/* Fill referer header */
+	strcpy(referer_name, "Referer");
+	strcpy(referer_value, full_host);
+	strcat(referer_value, uri);
+
+	/* Fill content-type header */
+	strcpy(type_name, "Content-Type");
+	strcpy(type_value, "multipart/form-data; boundary=");
+	strcat(type_value, boundary);
+
+	/* Fill content-length header */
+	strcpy(length_name, "Content-Length");
+
 	divisor = 1000000000;
 	idx = 0;
-	while( !(contentLenght / divisor) )
+	while (0 == (content_length / divisor))
 	{
 		divisor /= 10;
 	}
 
-	while(divisor != 0)
+	while (0 != divisor)
 	{
-		lengthValue[idx] = '0' + contentLenght / divisor;
+		length_value[idx] = '0' + content_length / divisor;
 		++idx;
-		contentLenght = contentLenght % divisor;
+		content_length = content_length % divisor;
 		divisor /= 10;
 	}
-	lengthValue[idx] = '\0';
+	length_value[idx] = '\0';
 
-	requestParams.method[0] = 'P';
-	requestParams.method[1] = 'O';
-	requestParams.method[2] = 'S';
-	requestParams.method[3] = 'T';
-	requestParams.method[4] = '\0';
+	strcpy(conn_name, "Connection");
+	strcpy(conn_value, "keep-alive");
 
-	requestParams.isVersion11 = version;
-	requestParams.uri = uri;
-	requestParams.host = fullHost;
-	requestParams.headerCount = 4;
-	requestParams.headers = headers;
+	/* Fill header structures */
+	headers[0].name = referer_name;
+	headers[0].value = referer_value;
+	headers[1].name = type_name;
+	headers[1].value = type_value;
+	headers[2].name = length_name;
+	headers[2].value = length_value;
+	headers[3].name = conn_name;
+	headers[3].value = conn_value;
 
-	headers[0].name = referer;
-	headers[0].value = refererValue;
-	headers[1].name = type;
-	headers[1].value = typeValue;
-	headers[2].name = length;
-	headers[2].value = lengthValue;
-	headers[3].name = conn;
-	headers[3].value = connValue;
+	/* Fill request structure */
+	strcpy(request_params.method, "POST");
+	request_params.uri = uri;
+	request_params.is_version11 = version;
+	request_params.host = full_host;
+	request_params.header_count = 4;
+	request_params.headers = headers;
 
-	result = buildRequest(&requestParams, request, &requestSize);
-	if(0 == result)
+	/* Build and send request */
+	result = build_request(&request_params, request, &request_size);
+	if (0 != result)
 	{
-		result = writeData(socket, request, requestSize);
-		if(requestSize == result)
-		{
-			result = 0;
-		}
+		return -1;
+	}
+
+	result = write_data(socket, request, request_size);
+	if (request_size == result)
+	{
+		result = 0;
 	}
 
 	return result;
 }
 
-static int generateAndSendContentHeader(int socket, const char* filename, uint8_t filenameLength, const char* formName, uint8_t formNameLength, const char* boundary)
+static int
+generate_and_send_content_header(int socket, const char *filename, uint8_t filename_length, const char *form_name, uint8_t form_name_length, const char *boundary)
 {
+	const int header_size = 100 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + filename_length + form_name_length + 1;
+	char header[header_size];
 	int result = 0;
 
-	const int headerSize = 100 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + filenameLength + formNameLength + 1;
-	uint8_t header[headerSize];
-
-	result = buildUploadPayloadHeader(filename, formName, boundary, header, NULL);
-
-	if(0 == result)
+	if (NULL == filename)
 	{
-		result = writeData(socket, header, headerSize - 1);
-		if(headerSize - 1 == result)
-		{
-			result = 0;
-		}
+		return -1;
+	}
+
+	if (NULL == form_name)
+	{
+		return -1;
+	}
+
+	if (NULL == boundary)
+	{
+		return -1;
+	}
+
+	result = build_upload_payload_header(filename, form_name, boundary, header, NULL);
+	if (0 != result)
+	{
+		return -1;
+	}
+
+	result = write_data(socket, header, header_size - 1);
+	if (header_size - 1 == result)
+	{
+		result = 0;
 	}
 
 	return result;
 }
 
-static int generateAndSendContentTrailer(int socket, const char* boundary)
+static int
+send_file_data(int fd, int socket)
 {
-	int result = 0;
-
-	const int trailerSize = 8 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1;
-	uint8_t trailer[trailerSize];
-
-	result = buildUploadPayloadTrailer(boundary, trailer, NULL);
-
-	if(0 == result)
-	{
-		result = writeData(socket, trailer, trailerSize - 1);
-		if(trailerSize - 1 == result)
-		{
-			result = 0;
-		}
-	}
-
-	return result;
-}
-
-static int sendData(int fd, int socket)
-{
-	int result = 0;
-
-	int bytesRead;
-	int bytesWritten;
 	char buffer[BUFFER_SIZE];
+	int bytes_read;
+	int bytes_written;
+	int result;
 
-	bytesRead = read(fd, buffer, BUFFER_SIZE);
-
-	while(bytesRead > 0)
+	result = 0;
+	bytes_read = read(fd, buffer, BUFFER_SIZE);
+	while (bytes_read > 0)
 	{
-		bytesWritten = writeData(socket, buffer, bytesRead);
+		bytes_written = write_data(socket, buffer, bytes_read);
 
-		if(bytesWritten != bytesRead)
+		if (bytes_written != bytes_read)
 		{
 			result = -1;
 			break;
 		}
 
-		bytesRead = read(fd, buffer, BUFFER_SIZE);
+		bytes_read = read(fd, buffer, BUFFER_SIZE);
 	}
 
-	if(bytesRead < 0)
+	if (bytes_read < 0)
 	{
 		result = -1;
 	}
@@ -328,61 +371,92 @@ static int sendData(int fd, int socket)
 	return result;
 }
 
-static int receiveAndDecode(int socket)
+static int
+generate_and_send_content_trailer(int socket, const char *boundary)
 {
-	int result = 0;
+	const int trailer_size = 8 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1;
+	char trailer[trailer_size];
+	int result;
 
-	uint8_t buff[18] = {0};
-	uint8_t bytesRead = 0;
-	char theVoid;
-
-	HTTPResponse response;
-
-	response.headerCount = 0;
-
-	while(!bytesRead)
-	{
-		bytesRead = readData(socket, buff, 13);
-	}
-
-	if(bytesRead < 0)
+	if (NULL == boundary)
 	{
 		return -1;
 	}
 
-	while(bytesRead != 13)
+	result = build_upload_payload_trailer(boundary, trailer, NULL);
+	if (0 != result)
 	{
-		result = readData(socket, buff + bytesRead, 13 - bytesRead);
-		if(result < 0)
+		return -1;
+	}
+
+	result = write_data(socket, trailer, trailer_size - 1);
+	if (trailer_size - 1 == result)
+	{
+		result = 0;
+	}
+
+	return result;
+}
+
+static int
+receive_and_decode(int socket)
+{
+	
+	struct http_response response;
+	uint8_t bytes_read;
+	uint8_t buff[18];
+	int result;
+	char the_void;
+
+	response.header_count = 0;
+	bytes_read = 0;
+
+	/* Until data apears on the socket */
+	while (0 == bytes_read)
+	{
+		bytes_read = read_data(socket, buff, 13);
+	}
+
+	if (bytes_read < 0)
+	{
+		return -1;
+	}
+
+	/* Until relevant info is read */
+	while (bytes_read != 13)
+	{
+		result = read_data(socket, buff + bytes_read, 13 - bytes_read);
+		if (result < 0)
 		{
 			return -1;
 		}
-		bytesRead += result;
+		bytes_read += result;
 	}
 
-	result = 0;
-	while(result = readData(socket, &theVoid, 1))
+	/* Discard unneeded data */
+	while (result = read_data(socket, &the_void, 1))
 	{
-		if(result < 0)
+		if (result < 0)
 		{
 			return -1;
 		}
 	}
 
+	/* Put nessesary symbols for the parser */
 	buff[13] = '\r';
 	buff[14] = '\n';
 	buff[15] = '\r';
 	buff[16] = '\n';
 	buff[17] = '\0';
 
-	result = decodeResponse(buff, &response, NULL);
+	result = decode_response(buff, &response, NULL);
 
-	if(result)
+	if (0 != result)
 	{
 		return result;
 	}
 
-	if( 2 != (response.code / 100) )
+	if (2 != (response.code / 100))
 	{
 		result = response.code;
 	}
@@ -390,114 +464,146 @@ static int receiveAndDecode(int socket)
 	return result;
 }
 
-int uploadFile(const char* filepath, const char* formName, const char* host, uint16_t port, const char* uri)
+int
+upload_file(const char *filepath, const char *form_name, const char *host, uint16_t port, const char *uri)
 {
-	int error = 0;
-
-	int fileDescriptor;
-	int fileSize;
-	int socketDescriptor;
+	int error;
 	char boundary[BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1];
-	char filename[NAME_MAX] = {0};
-	uint32_t hostAddr;
+	char filename[MAX_FILENAME_LENGTH + 1];
+	int file_descriptor;
+	int file_size;
+	int socket_descriptor;
 
-	// PREPARE PART
-	generateBoundary(boundary);
-	getFilenameFromPath(filename, filepath);
-	
-
-	fileDescriptor = open(filepath, O_RDONLY);
-	if(fileDescriptor < 0)
+	if (NULL == filepath)
 	{
 		return -1;
 	}
 
-	fileSize = getFileSize(fileDescriptor);
-	if(fileSize < 0)
+	if (NULL == form_name)
 	{
-		close(fileDescriptor);
 		return -1;
 	}
 
-	// SEND PART
-	socketDescriptor = openSocket();
-	if(socketDescriptor < 0)
+	if (NULL == host)
 	{
-		close(fileDescriptor);
 		return -1;
 	}
 
-	error = connectToAddr(socketDescriptor, host, port);
-	if(error)
+	if (NULL == uri)
 	{
-		closeSocket(socketDescriptor);
-		close(fileDescriptor);
 		return -1;
 	}
 
-	error = generateAndSendRequest(socketDescriptor, host, port, uri, strlen(uri), 1, boundary,
-		fileSize + getContentHeaderSize( strlen(filename), strlen(formName) ) + getContentTrailerSize());
-	if(error)
+	/* Preparations */
+	error = generate_boundary(boundary);
+	if (0 != error)
 	{
-		closeSocket(socketDescriptor);
-		close(fileDescriptor);
+		return -1;
+	}
+
+	error = get_filename_from_path(filename, filepath);
+	if (0 != error)
+	{
 		return -1;
 	}
 	
-	error = generateAndSendContentHeader(socketDescriptor, filename, strlen(filename), formName, strlen(formName), boundary);
-	if(error)
+	file_descriptor = open(filepath, O_RDONLY);
+	if (file_descriptor < 0)
 	{
-		closeSocket(socketDescriptor);
-		close(fileDescriptor);
 		return -1;
 	}
 
-	error = sendData(fileDescriptor, socketDescriptor);
-	if(error)
+	file_size = get_file_size(file_descriptor);
+	if (file_size < 0)
 	{
-		closeSocket(socketDescriptor);
+		close(file_descriptor);
 		return -1;
 	}
 
-	error = generateAndSendContentTrailer(socketDescriptor, boundary);
-	if(error)
+	/* Connection */
+	socket_descriptor = open_socket();
+	if (socket_descriptor < 0)
 	{
-		closeSocket(socketDescriptor);
+		close(file_descriptor);
 		return -1;
 	}
 
-	// RECV PART
-	error = receiveAndDecode(socketDescriptor);
+	error = connect_to_addr(socket_descriptor, host, port);
+	if (0 != error)
+	{
+		close_socket(socket_descriptor);
+		close(file_descriptor);
+		return -1;
+	}
 
-	// CLEAN PART
-	close(fileDescriptor);
-	closeSocket(socketDescriptor);
+	/* Data sending */
+	error = generate_and_send_request(socket_descriptor, host, port, uri, strlen(uri), 1, boundary,
+		file_size + get_content_header_size(strlen(filename), strlen(form_name)) + get_content_trailer_size());
+	if (0 != error)
+	{
+		close_socket(socket_descriptor);
+		close(file_descriptor);
+		return -1;
+	}
+	
+	error = generate_and_send_content_header(socket_descriptor, filename, strlen(filename), form_name, strlen(form_name), boundary);
+	if (0 != error)
+	{
+		close_socket(socket_descriptor);
+		close(file_descriptor);
+		return -1;
+	}
+
+	error = send_file_data(file_descriptor, socket_descriptor);
+	if (0 != error)
+	{
+		close_socket(socket_descriptor);
+		close(file_descriptor);
+		return -1;
+	}
+
+	error = generate_and_send_content_trailer(socket_descriptor, boundary);
+	if (0 != error)
+	{
+		close_socket(socket_descriptor);
+		close(file_descriptor);
+		return -1;
+	}
+
+	/* Response Receiving */
+	error = receive_and_decode(socket_descriptor);
+
+	/* Cleanup */
+	close_socket(socket_descriptor);
+	close(file_descriptor);
 
 	return error;
 }
 
-uint32_t generateNumber()
-{
-	currentNumber = (currentNumber * multiplier) + adder;
-	return currentNumber;	
-}
-
-void setSeed(uint32_t startValue, uint32_t multiplicative, uint32_t additive)
+void
+set_seed(uint32_t start_value, uint32_t mult_part, uint32_t add_part)
 {
 	uint8_t fixer;
 
-	currentNumber = startValue;
-	fixer = (multiplicative - 1) % 4;
-	if(fixer != 0)
+	current_number = start_value;
+	fixer = (mult_part - 1) % 4;
+	if (fixer != 0)
 	{
-		multiplicative -= fixer;
+		mult_part -= fixer;
 	}
-	multiplier = multiplicative;
+	multiplicative_part = mult_part;
 
-	fixer = additive % 2;
-	if(fixer != 1)
+	fixer = add_part % 2;
+	if (fixer != 1)
 	{
-		adder += 1;
+		add_part += 1;
 	}
-	adder = additive;
+	additive_part = add_part;
+}
+
+uint32_t
+generate_number()
+{
+	current_number = (current_number * multiplicative_part) + additive_part;
+	return current_number;
 }
