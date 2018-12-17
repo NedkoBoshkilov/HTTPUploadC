@@ -401,20 +401,28 @@ generate_and_send_content_trailer(int socket, const char *boundary)
 static int
 receive_and_decode(int socket)
 {
-	
+	int timeout;
+	int timeout_count;
 	struct http_response response;
 	uint8_t bytes_read;
 	uint8_t buff[18];
 	int result;
 	char the_void;
 
+	timeout = 1000;
+	timeout_count = 5;
 	response.header_count = 0;
 	bytes_read = 0;
 
 	/* Until data apears on the socket */
 	while (0 == bytes_read)
 	{
-		bytes_read = read_data(socket, buff, 13);
+		if(0 == timeout_count)
+		{
+			return -1;
+		}
+		bytes_read = read_data(socket, buff, 13, timeout);
+		--timeout_count;
 	}
 
 	if (bytes_read < 0)
@@ -425,7 +433,7 @@ receive_and_decode(int socket)
 	/* Until relevant info is read */
 	while (bytes_read != 13)
 	{
-		result = read_data(socket, buff + bytes_read, 13 - bytes_read);
+		result = read_data(socket, buff + bytes_read, 13 - bytes_read, timeout);
 		if (result < 0)
 		{
 			return -1;
@@ -434,8 +442,9 @@ receive_and_decode(int socket)
 	}
 
 	/* Discard unneeded data */
-	while (result = read_data(socket, &the_void, 1))
+	while (0 != result)
 	{
+		result = read_data(socket, &the_void, 1, timeout);
 		if (result < 0)
 		{
 			return -1;
@@ -527,7 +536,7 @@ upload_file(const char *filepath, const char *form_name, const char *host, uint1
 		close(file_descriptor);
 		return -1;
 	}
-
+	
 	error = connect_to_addr(socket_descriptor, host, port);
 	if (0 != error)
 	{

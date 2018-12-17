@@ -29,8 +29,9 @@ int write_data(int _dest, void *_buffer, uint32_t _size);
 
 /*
  * Reads [size] bytes from specified socket to buffer
+ * ms - timeout in ms after which it's assumed there's no data
  * Returns number of bytes read on success; -1 on failure
  */
-int read_data(int _src, void *_buffer, uint32_t _size);
+int read_data(int _src, void *_buffer, uint32_t _size, int _ms);
 
 #endif // COMMS_H_

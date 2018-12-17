@@ -1,7 +1,9 @@
 #include <sys/types.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
+#include <poll.h>
 #include <unistd.h>
 
 #include "comms.h"
@@ -31,7 +33,7 @@ connect_to_addr(int socket, const char *host, uint16_t port)
 	server_address.sin_addr.s_addr = ipv4_addr.s_addr;
 	server_address.sin_port = htons(port);
 
-	result = connect(socket, (const struct sockaddr*) &server_address, sizeof(server_address));
+	result = connect(socket, (const struct sockaddr*)&server_address, sizeof(server_address));
 
 	return result;
 }
@@ -53,9 +55,21 @@ write_data(int dest, void *buffer, uint32_t size)
 }
 
 int
-read_data(int src, void *buffer, uint32_t size)
+read_data(int src, void *buffer, uint32_t size, int ms)
 {
+	struct timeval timeout;
+	fd_set set;
 	int result;
-	result = read(src, buffer, size);
+
+	timeout.tv_sec = ms / 1000;
+	timeout.tv_usec = ((time_t)ms % 1000) * 1000;
+	FD_ZERO(&set);
+	FD_SET(src, &set);
+
+	result = select(src + 1, &set, NULL, NULL, &timeout);
+	if(result > 0)
+	{
+		result = read(src, buffer, size);
+	}
 	return result;
 }
