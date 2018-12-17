@@ -431,14 +431,20 @@ receive_and_decode(int socket)
 	}
 
 	/* Until relevant info is read */
+	timeout_count = 5;
 	while (bytes_read != 13)
 	{
+		if(0 == timeout_count)
+		{
+			return -1;
+		}
 		result = read_data(socket, buff + bytes_read, 13 - bytes_read, timeout);
 		if (result < 0)
 		{
 			return -1;
 		}
 		bytes_read += result;
+		--timeout_count;
 	}
 
 	/* Discard unneeded data */
