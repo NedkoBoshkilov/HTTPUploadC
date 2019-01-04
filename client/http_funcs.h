@@ -15,7 +15,7 @@
  * 		stored if not NULL.
  */
 int build_request (const struct http_request *_request, char *_dest,
-		   uint32_t * _request_size);
+		   uint32_t *_request_size);
 
 /*
  * Decodes an HTTP response string into a prepared http_response structure.
@@ -27,7 +27,7 @@ int build_request (const struct http_request *_request, char *_dest,
  * 		be stored if not NULL.
  */
 int decode_response (const char *_response, struct http_response *_dest,
-		     uint32_t * _headers_length);
+		     uint32_t *_headers_length);
 
 /*
  * Builds the payload's internal header into a string when a multipart/form-data
@@ -44,7 +44,7 @@ int decode_response (const char *_response, struct http_response *_dest,
  */
 int build_upload_payload_header (const char *_filename, const char *_form_name,
 				 const char *_boundary, char *_header,
-				 uint32_t * _header_size);
+				 uint32_t *_header_size);
 
 /*
  * Builds the payload's internal trailer into a string when a
@@ -57,6 +57,6 @@ int build_upload_payload_header (const char *_filename, const char *_form_name,
  * 		will be stored if not NULL.
  */
 int build_upload_payload_trailer (const char *_boundary, char *_trailer,
-				  uint32_t * _trailer_size);
+				  uint32_t *_trailer_size);
 
 #endif /* HTTP_FUNCTIONS_H_ */
