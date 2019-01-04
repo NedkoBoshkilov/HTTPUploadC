@@ -254,7 +254,7 @@ decode_response (const char *response, struct http_response *dest,
 					     &(response[response_index]),
 					     delimiter_index - response_index -
 					     1)) {
-					response_index = delimiter_index;
+					response_index = delimiter_index + 1;
 					while (is_whitespace
 					       (response[response_index])) {
 						++response_index;
@@ -266,10 +266,9 @@ decode_response (const char *response, struct http_response *dest,
 						 &(response[response_index]),
 						 delimiter_index -
 						 response_index);
-					dest->
-					  headers[idx].value[delimiter_index -
-							     response_index +
-							     1] = '\0';
+					dest->headers[idx].
+					  value[delimiter_index -
+						response_index + 1] = '\0';
 					break;
 				}
 			}
@@ -280,7 +279,6 @@ decode_response (const char *response, struct http_response *dest,
 					   response_index) - response_index - 2;
 		}
 	}
-
 	return 0;
 }
 
@@ -291,7 +289,7 @@ build_upload_payload_header (const char *filename, const char *form_name,
 	/*
 	 * Format of the header:
 	 * --[boundary]\r\n
-	 * Content-Disposition: form-data; name=\"[formName]\"; filename=\"[filename]\"\r\n
+	 * Content-Disposition:form-data;name="[formName]";filename="[filename]"\r\n
 	 * Content-Type: application/octet-stream\r\n
 	 * \r\n
 	 */

@@ -13,10 +13,14 @@
 static int port_fd = -1;
 
 static const char open_command[19 + 1] = "AT+NSOCR=STREAM,6,0";
-static const char connect_command[9 + 1] = "AT+NSOCO=";	/* [socket],[ipaddr],[port] */
-static const char write_command[9 + 1] = "AT+NSOSD=";	/* [socket],[length],[data] Max length - 1358 bytes */
-static const char read_response[8 + 1] = "+NSONMI,";	/* [socket],[length],[data] */
-static const char close_command[9 + 1] = "AT+NSOCL=";	/* [socket] */
+/* AT+NSOCO=[socket],[ipaddr],[port] */
+static const char connect_command[9 + 1] = "AT+NSOCO=";
+/* AT+NSOSD=[socket],[length],[data] Max length - 1358 bytes */
+static const char write_command[9 + 1] = "AT+NSOSD=";
+/* +NSONMI,[socket],[length],[data] Max length - 1460 bytes */
+static const char read_response[8 + 1] = "+NSONMI,";
+/* AT+NSOCL=[socket] */
+static const char close_command[9 + 1] = "AT+NSOCL=";
 static const char ok_response[6 + 1] = "\r\nOK\r\n";
 static const char error_response[9 + 1] = "\r\nERROR\r\n";
 static const int global_timeout = 2500;
@@ -350,7 +354,8 @@ write_data (int dest, void *buffer, uint32_t size) {
 	int cycles;
 	int curr_cycle;
 	int curr_length;
-	char msg_buffer[18 + 2 * max_msg_len];	/* AT+NSOSD=[socket(1)],[length(4)],[data](1538*2)\r\n */
+	/* AT+NSOSD=[socket(1)],[length(4)],[data](1538*2)\r\n */
+	char msg_buffer[18 + 2 * max_msg_len];
 	int idx;
 	int divider;
 	int temp;
@@ -461,23 +466,26 @@ write_data (int dest, void *buffer, uint32_t size) {
 
 int64_t
 read_data (int src, void *buffer, uint32_t size, int ms) {
-	static char msg_buffer[1358];
+	static char msg_buffer[1460];
 	static int msg_size = 0;
 	static int msg_idx = 0;
+	const int max_msg_size = 1460;
 	int64_t result;
 	bool needs_more_blocks;
 	int buff_idx;
 	int copy_count;
+	int i;
 
 	result = 0;
 	needs_more_blocks = true;
 	buff_idx = 0;
-	int i = 0;
-
 	while (needs_more_blocks) {
 		if (msg_idx == msg_size) {
 			msg_size = read_next_block (msg_buffer, ms);
 			msg_idx = 0;
+			if (msg_size > max_msg_size) {
+				return -1;
+			}
 		}
 
 		if (msg_size < 0) {
@@ -493,9 +501,10 @@ read_data (int src, void *buffer, uint32_t size, int ms) {
 			copy_count = msg_size - msg_idx;
 		}
 
-		for (; buff_idx < copy_count; ++buff_idx) {
+		for (i = 0; i < copy_count; ++i) {
 			((uint8_t *) buffer)[buff_idx] = msg_buffer[msg_idx];
 			++msg_idx;
+			++buff_idx;
 		}
 		result += copy_count;
 	}
