@@ -22,7 +22,7 @@
 #define BOUNDARY_DASH_COUNT 16
 #define BOUNDARY_HEX_COUNT 16
 
-/* Defines the size of the chunks for transfering the file*/
+/* Defines the size of the chunks for transfering the file */
 #define BUFFER_SIZE 1024
 
 /* 
@@ -50,6 +50,7 @@ static uint32_t get_content_trailer_size ();
 static int64_t get_file_size (int _fd);
 static int get_filename_from_path (char *_filename, const char *_filepath);
 static int generate_and_send_post_request (int _socket, const char *_host,
+					   uint32_t _host_length,
 					   uint16_t _port, const char *_uri,
 					   uint32_t _uri_length,
 					   uint8_t _version,
@@ -68,7 +69,8 @@ static int receive_and_decode_post (int _socket);
 
 /* GET functions */
 static int generate_and_send_get_request (int _socket, const char *_host,
-					  uint16_t _port, const char *_uri,
+					  uint32_t _host_length, uint16_t _port,
+					  const char *_uri,
 					  uint32_t _uri_length,
 					  uint8_t _version);
 static int receive_and_decode_get (int _socket);
@@ -216,11 +218,12 @@ get_filename_from_path (char *filename, const char *filepath) {
 }
 
 static int
-generate_and_send_post_request (int socket, const char *host, uint16_t port,
+generate_and_send_post_request (int socket, const char *host,
+				uint32_t host_length, uint16_t port,
 				const char *uri, uint32_t uri_length,
 				uint8_t version, const char *boundary,
 				uint32_t content_length) {
-	char full_host[22];
+	char full_host[host_length + 6];
 	char referer_name[8];
 	char referer_value[21 + uri_length + 1];
 	char type_name[13];
@@ -268,7 +271,12 @@ generate_and_send_post_request (int socket, const char *host, uint16_t port,
 	/* Fill referer header */
 	strcpy (referer_name, "Referer");
 	strcpy (referer_value, full_host);
-	strcat (referer_value, uri);
+
+	if (NULL == strchr (uri, '?')) {
+		strcat (referer_value, uri);
+	} else {
+		strncat (referer_value, uri, strchr (uri, '?') - uri);
+	}
 
 	/* Fill content-type header */
 	strcpy (type_name, "Content-Type");
@@ -492,7 +500,8 @@ receive_and_decode_post (int socket) {
 }
 
 static int
-generate_and_send_get_request (int socket, const char *host, uint16_t port,
+generate_and_send_get_request (int socket, const char *host,
+			       uint32_t host_length, uint16_t port,
 			       const char *uri, uint32_t uri_length,
 			       uint8_t version) {
 	char full_host[22];
@@ -743,7 +752,8 @@ upload_file (const char *filepath, const char *form_name, const char *host,
 
 	/* Data sending */
 	error =
-	  generate_and_send_post_request (socket_descriptor, host, port, uri,
+	  generate_and_send_post_request (socket_descriptor, host,
+					  strlen (host), port, uri,
 					  strlen (uri), 1, boundary,
 					  file_size +
 					  get_content_header_size (strlen
@@ -807,7 +817,6 @@ get_resource (const char *host, uint16_t port, const char *uri) {
 		return -1;
 	}
 
-	/* Connection */
 	socket = open_socket ();
 	if (socket < 0) {
 		return -1;
@@ -818,20 +827,16 @@ get_resource (const char *host, uint16_t port, const char *uri) {
 		close_socket (socket);
 		return -1;
 	}
-	
-	/* Data sending */
+
 	result =
-	  generate_and_send_get_request (socket, host, port, uri, strlen (uri),
-					 1);
+	  generate_and_send_get_request (socket, host, strlen (host), port, uri,
+					 strlen (uri), 1);
 	if (0 != result) {
 		close_socket (socket);
 		return -1;
 	}
 
-	/* Response Receiving */
 	result = receive_and_decode_get (socket);
-	
-	/* Cleanup */
 	close_socket (socket);
 	return result;
 }
