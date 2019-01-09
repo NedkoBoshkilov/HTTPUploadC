@@ -11,19 +11,27 @@
 #include "comms.h"
 
 static int port_fd = -1;
+static int global_timeout = 2500;
+static const char *portname = NULL;
 
 static const char open_command[19 + 1] = "AT+NSOCR=STREAM,6,0";
-/* AT+NSOCO=[socket],[ipaddr],[port] */
+/* [socket],[ipaddr],[port] */
 static const char connect_command[9 + 1] = "AT+NSOCO=";
-/* AT+NSOSD=[socket],[length],[data] Max length - 1358 bytes */
+/* [socket],[length],[data] Max length - 1460 bytes */
 static const char write_command[9 + 1] = "AT+NSOSD=";
-/* +NSONMI,[socket],[length],[data] Max length - 1460 bytes */
+/* [socket],[length],[data] */
 static const char read_response[8 + 1] = "+NSONMI,";
-/* AT+NSOCL=[socket] */
+/* [socket] */
 static const char close_command[9 + 1] = "AT+NSOCL=";
 static const char ok_response[6 + 1] = "\r\nOK\r\n";
 static const char error_response[9 + 1] = "\r\nERROR\r\n";
-static const int global_timeout = 2500;
+
+static int open_port ();
+static int close_port ();
+static int hex_to_decimal_convert (const char *_str);
+static int read_port (void *_buffer, int _size, int _ms);
+static int read_buffered_port (void *_buffer, int _size, int _ms);
+static int read_next_block (void *_buffer, int _ms);
 
 /*
  * Command response format
@@ -43,7 +51,11 @@ open_port () {
 		return port_fd;
 	}
 
-	result = open ("/dev/ttyXRUSB0", O_RDWR);
+	if (NULL == portname) {
+		return -1;
+	}
+
+	result = open (portname, O_RDWR);
 	if (result < 0) {
 		return -1;
 	}
@@ -54,7 +66,21 @@ open_port () {
 }
 
 static int
-hex_to_decimal_convert (char *str) {
+close_port () {
+	int result;
+
+	result = 0;
+	if (port_fd >= 0) {
+		result = close (port_fd);
+		if (0 == result) {
+			port_fd = -1;
+		}
+	}
+	return result;
+}
+
+static int
+hex_to_decimal_convert (const char *str) {
 	int result;
 
 	result = 0;
@@ -193,6 +219,8 @@ read_next_block (void *buffer, int ms) {
 	return result;
 }
 
+/* HEADER FUNCTIONS */
+
 int
 open_socket () {
 	int result;
@@ -206,11 +234,13 @@ open_socket () {
 
 	bytes_written = write (port_fd, open_command, strlen (open_command));
 	if (bytes_written < strlen (open_command)) {
+		close_port ();
 		return -1;
 	}
 
 	bytes_written = write (port_fd, "\r\n", 2);
 	if (bytes_written < 2) {
+		close_port ();
 		return -1;
 	}
 
@@ -221,10 +251,12 @@ open_socket () {
 		      strlen (ok_response)))) {
 		result = buffer[2];
 	} else {
-		/* DESTROY INPUT BUFFER ?? */
+		/* DESTROY INPUT BUFFER ??? */
+		close_port ();
 		return -1;
 	}
 
+	close_port ();
 	return result;
 }
 
@@ -251,6 +283,7 @@ connect_to_addr (int socket, const char *host, uint16_t port) {
 	bytes_written =
 	  write (port_fd, connect_command, strlen (connect_command));
 	if (bytes_written < strlen (connect_command)) {
+		close_port ();
 		return -1;
 	}
 
@@ -259,12 +292,14 @@ connect_to_addr (int socket, const char *host, uint16_t port) {
 	buffer[1] = ',';
 	bytes_written = write (port_fd, buffer, 2);
 	if (bytes_written < 2) {
+		close_port ();
 		return -1;
 	}
 
 	/* Write host */
 	bytes_written = write (port_fd, host, strlen (host));
 	if (bytes_written < strlen (host)) {
+		close_port ();
 		return -1;
 	}
 
@@ -291,20 +326,24 @@ connect_to_addr (int socket, const char *host, uint16_t port) {
 	/* Write comma + port */
 	bytes_written = write (port_fd, buffer, idx);
 	if (bytes_written < idx) {
+		close_port ();
 		return -1;
 	}
 
 	bytes_read = read_buffered_port (buffer, 9, 0);
 	if (bytes_read < strlen (ok_response)) {
+		close_port ();
 		return -1;
 	}
 
 	if (0 ==
 	    strncmp (buffer + bytes_read - strlen (ok_response), ok_response,
 		     strlen (ok_response))) {
+		close_port ();
 		return 0;
 	} else {
 		/* DESTROY INPUT BUFFER ??? */
+		close_port ();
 		return -1;
 	}
 }
@@ -321,6 +360,7 @@ close_socket (int socket) {
 
 	bytes_written = write (port_fd, close_command, strlen (close_command));
 	if (bytes_written < strlen (close_command)) {
+		close_port ();
 		return -1;
 	}
 
@@ -329,12 +369,14 @@ close_socket (int socket) {
 	buffer[2] = '\n';
 	bytes_written = write (port_fd, buffer, 3);
 	if (bytes_written < 3) {
+		close_port ();
 		return -1;
 	}
 
 	bytes_read = read_buffered_port (buffer, 9, 0);
 
 	if (bytes_read < strlen (ok_response)) {
+		close_port ();
 		return -1;
 	}
 
@@ -342,9 +384,11 @@ close_socket (int socket) {
 	    strncmp (buffer + bytes_read - strlen (ok_response), ok_response,
 		     strlen (ok_response))) {
 		/* DESTROY INPUT BUFFER ??? */
+		close_port ();
 		return -1;
 	}
 
+	close_port ();
 	return 0;
 }
 
@@ -432,6 +476,7 @@ write_data (int dest, void *buffer, uint32_t size) {
 
 		bytes_written = write (port_fd, msg_buffer, idx);
 		if (bytes_written < idx) {
+			close_port ();
 			return -1;
 		}
 
@@ -450,6 +495,7 @@ write_data (int dest, void *buffer, uint32_t size) {
 		bytes_read = read_buffered_port (msg_buffer, response_size, 0);
 
 		if (bytes_read < strlen (ok_response)) {
+			close_port ();
 			return -1;
 		}
 
@@ -457,10 +503,12 @@ write_data (int dest, void *buffer, uint32_t size) {
 		    strncmp (msg_buffer + bytes_read - strlen (ok_response),
 			     ok_response, strlen (ok_response))) {
 			/* DESTROY INPUT BUFFER ??? */
+			close_port ();
 			return -1;
 		}
 	}
 
+	close_port ();
 	return size;
 }
 
@@ -484,11 +532,13 @@ read_data (int src, void *buffer, uint32_t size, int ms) {
 			msg_size = read_next_block (msg_buffer, ms);
 			msg_idx = 0;
 			if (msg_size > max_msg_size) {
+				close_port ();
 				return -1;
 			}
 		}
 
 		if (msg_size < 0) {
+			close_port ();
 			return -1;
 		} else if (0 == msg_size) {
 			break;
@@ -508,5 +558,21 @@ read_data (int src, void *buffer, uint32_t size, int ms) {
 		}
 		result += copy_count;
 	}
+
+	close_port ();
 	return result;
+}
+
+void
+comms_set_timeout (int ms) {
+	if (ms > 0) {
+		global_timeout = ms;
+	} else {
+		global_timeout = 2500;
+	}
+}
+
+void
+set_port (const char *port) {
+	portname = port;
 }

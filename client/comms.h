@@ -34,4 +34,16 @@ int64_t write_data (int _dest, void *_buffer, uint32_t _size);
  */
 int64_t read_data (int _src, void *_buffer, uint32_t _size, int _ms);
 
+/*
+ * Sets the default timeout for all operations
+ * ms - timeout in ms
+ */
+void comms_set_timeout (int _ms);
+
+/*
+ * Sets the port to be used with external devices
+ * _port - portname to be used
+ */
+void set_port (const char *_port);
+
 #endif // COMMS_H_

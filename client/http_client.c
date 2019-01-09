@@ -36,6 +36,19 @@ static uint32_t current_number;
 static uint32_t multiplicative_part;
 static uint32_t additive_part;
 
+/* Timeout to wait for the remote server */
+static int timeout = 2500;
+
+/* Content-Type enum */
+enum {
+	SHTTP_CONTTYPE_APP_URLENCODED = 0,
+	SHTTP_CONTTYPE_TEXT_PLAIN,
+	SHTTP_CONTTYPE_APP_OCTETSTREAM,
+	SHTTP_CONTTYPE_MULTIPART_FORMDATA
+};
+
+static int content_type = SHTTP_CONTTYPE_APP_URLENCODED;
+
 /* PROTOTYPES */
 
 /* Common functions */
@@ -73,8 +86,10 @@ static int generate_and_send_get_request (int _socket, const char *_host,
 					  const char *_uri,
 					  uint32_t _uri_length,
 					  uint8_t _version);
-static int receive_and_decode_get (int _socket);
-static int save_file (int _socket, uint32_t _filesize, int _ms);
+static int receive_and_decode_get (int _socket, const char *_filepath,
+				   uint32_t *_filesize);
+static int save_file (int _socket, const char *_filepath, uint32_t _filesize,
+		      int _ms);
 
 /* DEFINITIONS */
 static int
@@ -165,13 +180,20 @@ generate_boundary (char *dest) {
 
 static uint32_t
 get_content_header_size (uint32_t filename_length, uint32_t form_name_length) {
-	return 100 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT +
-	  filename_length + form_name_length;
+	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
+		return 100 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT +
+		  filename_length + form_name_length;
+	}
+	return 0;
 }
 
 static uint32_t
 get_content_trailer_size () {
-	return 8 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT;
+	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
+		return 8 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT;
+	}
+
+	return 0;
 }
 
 static int64_t
@@ -245,7 +267,9 @@ generate_and_send_post_request (int socket, const char *host,
 	 * POST [uri] HTTP/1.X\r\n
 	 * Host:[full_host]\r\n
 	 * Referer:[full_host + uri]\r\n
-	 * Content-Type:multipart/form-data; boundary=[boundary]\r\n
+	 * --- Content-Type:multipart/form-data; boundary=[boundary]\r\n
+	 * --- Content-Type:text/plain\r\n
+	 * --- Content-Type:application/octet-stream\r\n
 	 * Content-Length:[content_length]\r\n
 	 * Connection:[keep-alive|close]\r\n
 	 * \r\n
@@ -280,8 +304,23 @@ generate_and_send_post_request (int socket, const char *host,
 
 	/* Fill content-type header */
 	strcpy (type_name, "Content-Type");
-	strcpy (type_value, "multipart/form-data; boundary=");
-	strcat (type_value, boundary);
+	switch (content_type) {
+	case SHTTP_CONTTYPE_TEXT_PLAIN:
+		strcpy (type_value, "text/plain");
+		break;
+
+	case SHTTP_CONTTYPE_APP_OCTETSTREAM:
+		strcpy (type_value, "application/octet-stream");
+		break;
+
+	case SHTTP_CONTTYPE_MULTIPART_FORMDATA:
+		strcpy (type_value, "multipart/form-data; boundary=");
+		strcat (type_value, boundary);
+		break;
+
+	default:
+		return -1;
+	}
 
 	/* Fill content-length header */
 	strcpy (length_name, "Content-Length");
@@ -349,6 +388,10 @@ generate_and_send_post_content_header (int socket, const char *filename,
 	char header[header_size];
 	int result = 0;
 
+	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA != content_type) {
+		return 0;
+	}
+
 	if (NULL == filename) {
 		return -1;
 	}
@@ -382,6 +425,10 @@ generate_and_send_post_content_trailer (int socket, const char *boundary) {
 	  8 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1;
 	char trailer[trailer_size];
 	int result;
+
+	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA != content_type) {
+		return 0;
+	}
 
 	if (NULL == boundary) {
 		return -1;
@@ -429,7 +476,6 @@ send_file_data (int fd, int socket) {
 
 static int
 receive_and_decode_post (int socket) {
-	int timeout;
 	int timeout_count;
 	struct http_response response;
 	uint8_t bytes_read;
@@ -437,7 +483,6 @@ receive_and_decode_post (int socket) {
 	int result;
 	char the_void;
 
-	timeout = 1000;
 	timeout_count = 10;
 	response.header_count = 0;
 	bytes_read = 0;
@@ -565,8 +610,7 @@ generate_and_send_get_request (int socket, const char *host,
 }
 
 static int
-receive_and_decode_get (int socket) {
-	int timeout;
+receive_and_decode_get (int socket, const char *filepath, uint32_t *filesize) {
 	int timeout_count;
 	uint16_t buff_idx;
 	uint8_t buff[1025];
@@ -575,14 +619,18 @@ receive_and_decode_get (int socket) {
 	char length_value[17];
 	struct http_header headers[1];
 	struct http_response response;
-	uint32_t filesize;
+	uint32_t filesize_local;
 
 	/*
 	 * HTTP/1.X YYY [response_text]\r\n
 	 * Header: Value\r\n ...
 	 * \r\n
 	 */
-	timeout = 1000;
+
+	if (NULL == filepath) {
+		return -1;
+	}
+
 	timeout_count = 10;
 	buff_idx = 0;
 	while ((buff_idx < 4) ||
@@ -622,47 +670,35 @@ receive_and_decode_get (int socket) {
 			filesize = 0;
 			for (buff_idx = 0; length_value[buff_idx] != '\0';
 			     ++buff_idx) {
-				filesize *= 10;
-				filesize =
+				filesize_local *= 10;
+				filesize_local =
 				  filesize + length_value[buff_idx] - '0';
 			}
-			result = save_file (socket, filesize, timeout);
+
+			if (NULL != filesize) {
+				*filesize = filesize_local;
+			}
+
+			result =
+			  save_file (socket, filepath, filesize, timeout);
 		}
 	}
 	return result;
 }
 
 static int
-save_file (int socket, uint32_t filesize, int ms) {
+save_file (int socket, const char *filepath, uint32_t filesize, int ms) {
 	int result;
-	struct timeval stamp;
-	uint64_t divider;
-	char stamp_name[20];
 	uint8_t name_idx;
 	int fd;
 	uint8_t buffer[1024];
 	int bytes_written;
 
-	result = gettimeofday (&stamp, NULL);
-	if (0 != result) {
+	if (NULL == filepath) {
 		return -1;
 	}
 
-	divider = 1000000000000000000;
-	while (0 == (stamp.tv_sec / divider)) {
-		divider /= 10;
-	}
-
-	name_idx = 0;
-	while (divider != 0) {
-		stamp_name[name_idx] = (stamp.tv_sec / divider) + '0';
-		++name_idx;
-		stamp.tv_sec %= divider;
-		divider /= 10;
-	}
-	stamp_name[name_idx] = '\0';
-
-	fd = open (stamp_name, O_CREAT | O_WRONLY, S_IRWXU | S_IRWXG | S_IRWXO);
+	fd = open (filepath, O_CREAT | O_WRONLY, S_IRWXU | S_IRWXG | S_IRWXO);
 	if (fd < 0) {
 		return -1;
 	}
@@ -702,10 +738,6 @@ upload_file (const char *filepath, const char *form_name, const char *host,
 		return -1;
 	}
 
-	if (NULL == form_name) {
-		return -1;
-	}
-
 	if (NULL == host) {
 		return -1;
 	}
@@ -714,12 +746,23 @@ upload_file (const char *filepath, const char *form_name, const char *host,
 		return -1;
 	}
 
-	/* Preparations */
-	error = generate_boundary (boundary);
-	if (0 != error) {
+	if (SHTTP_CONTTYPE_APP_URLENCODED == content_type) {
 		return -1;
 	}
 
+	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
+		if (NULL == form_name) {
+			return -1;
+		}
+
+		/* Preparations */
+		error = generate_boundary (boundary);
+		if (0 != error) {
+			return -1;
+		}
+	}
+
+	/* Preparations */
 	error = get_filename_from_path (filename, filepath);
 	if (0 != error) {
 		return -1;
@@ -751,30 +794,43 @@ upload_file (const char *filepath, const char *form_name, const char *host,
 	}
 
 	/* Data sending */
-	error =
-	  generate_and_send_post_request (socket_descriptor, host,
-					  strlen (host), port, uri,
-					  strlen (uri), 1, boundary,
-					  file_size +
-					  get_content_header_size (strlen
-								   (filename),
-								   strlen
-								   (form_name))
-					  + get_content_trailer_size ());
+	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
+		error =
+		  generate_and_send_post_request (socket_descriptor, host,
+						  strlen (host), port, uri,
+						  strlen (uri), 1, boundary,
+						  file_size +
+						  get_content_header_size
+						  (strlen (filename),
+						   strlen (form_name)) +
+						  get_content_trailer_size ());
+	} else {
+		error =
+		  generate_and_send_post_request (socket_descriptor, host,
+						  strlen (host), port, uri,
+						  strlen (uri), 1, boundary,
+						  file_size);
+	}
+
 	if (0 != error) {
 		close_socket (socket_descriptor);
 		close (file_descriptor);
 		return -1;
 	}
 
-	error =
-	  generate_and_send_post_content_header (socket_descriptor, filename,
-						 strlen (filename), form_name,
-						 strlen (form_name), boundary);
-	if (0 != error) {
-		close_socket (socket_descriptor);
-		close (file_descriptor);
-		return -1;
+	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
+		error =
+		  generate_and_send_post_content_header (socket_descriptor,
+							 filename,
+							 strlen (filename),
+							 form_name,
+							 strlen (form_name),
+							 boundary);
+		if (0 != error) {
+			close_socket (socket_descriptor);
+			close (file_descriptor);
+			return -1;
+		}
 	}
 
 	error = send_file_data (file_descriptor, socket_descriptor);
@@ -784,12 +840,15 @@ upload_file (const char *filepath, const char *form_name, const char *host,
 		return -1;
 	}
 
-	error =
-	  generate_and_send_post_content_trailer (socket_descriptor, boundary);
-	if (0 != error) {
-		close_socket (socket_descriptor);
-		close (file_descriptor);
-		return -1;
+	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
+		error =
+		  generate_and_send_post_content_trailer (socket_descriptor,
+							  boundary);
+		if (0 != error) {
+			close_socket (socket_descriptor);
+			close (file_descriptor);
+			return -1;
+		}
 	}
 
 	/* Response Receiving */
@@ -803,10 +862,14 @@ upload_file (const char *filepath, const char *form_name, const char *host,
 }
 
 int
-get_resource (const char *host, uint16_t port, const char *uri) {
+get_resource (const char *filepath, uint32_t *filesize, const char *host,
+	      uint16_t port, const char *uri) {
 	int result;
 	int socket;
 
+	if (NULL == filepath) {
+		return -1;
+	}
 	if (NULL == host) {
 		return -1;
 	}
@@ -817,6 +880,7 @@ get_resource (const char *host, uint16_t port, const char *uri) {
 		return -1;
 	}
 
+	/* Connection */
 	socket = open_socket ();
 	if (socket < 0) {
 		return -1;
@@ -828,6 +892,7 @@ get_resource (const char *host, uint16_t port, const char *uri) {
 		return -1;
 	}
 
+	/* Data sending */
 	result =
 	  generate_and_send_get_request (socket, host, strlen (host), port, uri,
 					 strlen (uri), 1);
@@ -836,7 +901,10 @@ get_resource (const char *host, uint16_t port, const char *uri) {
 		return -1;
 	}
 
-	result = receive_and_decode_get (socket);
+	/* Response Receiving */
+	result = receive_and_decode_get (socket, filepath, filesize);
+
+	/* Cleanup */
 	close_socket (socket);
 	return result;
 }
@@ -863,4 +931,23 @@ uint32_t
 generate_number () {
 	current_number = (current_number * multiplicative_part) + additive_part;
 	return current_number;
+}
+
+void
+client_set_timeout (int ms) {
+	if (timeout > 0) {
+		timeout = ms;
+	} else {
+		timeout = 2500;
+	}
+}
+
+int
+set_content_type (int type) {
+	if (type > SHTTP_CONTTYPE_MULTIPART_FORMDATA) {
+		return -1;
+	}
+
+	content_type = type;
+	return 0;
 }

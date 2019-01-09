@@ -69,7 +69,7 @@ next_delimiter (const char *buff, uint32_t start) {
 
 int
 build_request (const struct http_request *request, char *dest,
-	       uint32_t * request_size) {
+	       uint32_t *request_size) {
 	/*
 	 * Format of the request:
 	 * [method] [uri] HTTP/1.X\r\n
@@ -152,7 +152,7 @@ build_request (const struct http_request *request, char *dest,
 
 int
 decode_response (const char *response, struct http_response *dest,
-		 uint32_t * headers_length) {
+		 uint32_t *headers_length) {
 	bool valid;
 	uint32_t response_index;
 	uint32_t idx;
@@ -285,11 +285,11 @@ decode_response (const char *response, struct http_response *dest,
 int
 build_upload_payload_header (const char *filename, const char *form_name,
 			     const char *boundary, char *header,
-			     uint32_t * header_size) {
+			     uint32_t *header_size) {
 	/*
 	 * Format of the header:
 	 * --[boundary]\r\n
-	 * Content-Disposition:form-data;name="[formName]";filename="[filename]"\r\n
+	 * Content-Disposition: form-data; name=\"[formName]\"; filename=\"[filename]\"\r\n
 	 * Content-Type: application/octet-stream\r\n
 	 * \r\n
 	 */
@@ -332,7 +332,7 @@ build_upload_payload_header (const char *filename, const char *form_name,
 
 int
 build_upload_payload_trailer (const char *boundary, char *trailer,
-			      uint32_t * trailer_size) {
+			      uint32_t *trailer_size) {
 	/*
 	 * Format of the trailer:
 	 * \r\n--[boundary]--\r\n
