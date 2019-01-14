@@ -36,9 +36,6 @@ static uint32_t current_number;
 static uint32_t multiplicative_part;
 static uint32_t additive_part;
 
-/* Timeout to wait for the remote server */
-static int timeout = 2500;
-
 /* Content-Type enum */
 enum {
 	SHTTP_CONTTYPE_APP_URLENCODED = 0,
@@ -47,53 +44,62 @@ enum {
 	SHTTP_CONTTYPE_MULTIPART_FORMDATA
 };
 
-static int content_type = SHTTP_CONTTYPE_APP_URLENCODED;
-
 /* PROTOTYPES */
-
 /* Common functions */
 static int build_full_host (char *_full_host, const char *_host,
-			    uint16_t _port);
+			    const char *_port);
 
 /* POST functions */
 static int generate_boundary (char *_dest);
 static uint32_t get_content_header_size (uint32_t _filename_length,
-					 uint32_t _form_name_length);
-static uint32_t get_content_trailer_size ();
+					 uint32_t _form_name_length,
+					 int _content_type);
+static uint32_t get_content_trailer_size (int _content_type);
 static int64_t get_file_size (int _fd);
 static int get_filename_from_path (char *_filename, const char *_filepath);
-static int generate_and_send_post_request (int _socket, const char *_host,
+static int generate_and_send_post_request (int _fd_com_port, int _socket,
+					   const char *_host,
 					   uint32_t _host_length,
-					   uint16_t _port, const char *_uri,
+					   const char *_port, const char *_uri,
 					   uint32_t _uri_length,
 					   uint8_t _version,
 					   const char *_boundary,
-					   uint32_t _content_length);
-static int generate_and_send_post_content_header (int _socket,
+					   int _content_type,
+					   uint32_t _content_length,
+					   int _com_ms);
+static int generate_and_send_post_content_header (int _fd_com_port, int _socket,
 						  const char *_filename,
 						  uint8_t _filename_length,
 						  const char *_form_name,
 						  uint8_t _form_name_length,
-						  const char *_boundary);
-static int generate_and_send_post_content_trailer (int _socket,
-						   const char *_boundary);
-static int send_file_data (int _fd, int _socket);
-static int receive_and_decode_post (int _socket);
+						  const char *_boundary,
+						  int _content_type,
+						  int _com_ms);
+static int generate_and_send_post_content_trailer (int _fd_com_port,
+						   int _socket,
+						   const char *_boundary,
+						   int _content_type,
+						   int _com_ms);
+static int send_file_data (int _fd_com_port, int _fd, int _socket, int _com_ms);
+static int receive_and_decode_post (int _fd_com_port, int _socket,
+				    int _http_ms);
 
 /* GET functions */
-static int generate_and_send_get_request (int _socket, const char *_host,
-					  uint32_t _host_length, uint16_t _port,
-					  const char *_uri,
+static int generate_and_send_get_request (int _fd_com_port, int _socket,
+					  const char *_host,
+					  uint32_t _host_length,
+					  const char *_port, const char *_uri,
 					  uint32_t _uri_length,
-					  uint8_t _version);
-static int receive_and_decode_get (int _socket, const char *_filepath,
-				   uint32_t *_filesize);
-static int save_file (int _socket, const char *_filepath, uint32_t _filesize,
-		      int _ms);
+					  uint8_t _version, int _com_ms);
+static int receive_and_decode_get (int _fd_com_port, int _socket,
+				   const char *_filepath, uint32_t *_filesize,
+				   int _http_ms);
+static int save_file (int _fd_com_port, int _socket, const char *_filepath,
+		      uint32_t _filesize, int _http_ms);
 
 /* DEFINITIONS */
 static int
-build_full_host (char *full_host, const char *host, uint16_t port) {
+build_full_host (char *full_host, const char *host, const char *port) {
 	int idx;
 	int divisor;
 
@@ -111,20 +117,26 @@ build_full_host (char *full_host, const char *host, uint16_t port) {
 
 	full_host[idx] = ':';
 	++idx;
+	full_host[idx] = '\0';
 
 	/* Put port in */
-	divisor = 10000;
-	while (0 == (port / divisor)) {
-		divisor /= 10;
-	}
+	/*
+	   divisor = 10000;
+	   while (0 == (port / divisor))
+	   {
+	   divisor /= 10;
+	   }
 
-	while (0 != divisor) {
-		full_host[idx] = '0' + port / divisor;
-		++idx;
-		port = port % divisor;
-		divisor /= 10;
-	}
-	full_host[idx] = '\0';
+	   while (0 != divisor)
+	   {
+	   full_host[idx] = '0' + port / divisor;
+	   ++idx;
+	   port = port % divisor;
+	   divisor /= 10;
+	   }
+	   full_host[idx] = '\0';
+	 */
+	strcat (full_host, port);
 
 	return 0;
 }
@@ -179,7 +191,8 @@ generate_boundary (char *dest) {
 }
 
 static uint32_t
-get_content_header_size (uint32_t filename_length, uint32_t form_name_length) {
+get_content_header_size (uint32_t filename_length, uint32_t form_name_length,
+			 int content_type) {
 	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
 		return 100 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT +
 		  filename_length + form_name_length;
@@ -188,7 +201,7 @@ get_content_header_size (uint32_t filename_length, uint32_t form_name_length) {
 }
 
 static uint32_t
-get_content_trailer_size () {
+get_content_trailer_size (int content_type) {
 	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
 		return 8 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT;
 	}
@@ -240,11 +253,12 @@ get_filename_from_path (char *filename, const char *filepath) {
 }
 
 static int
-generate_and_send_post_request (int socket, const char *host,
-				uint32_t host_length, uint16_t port,
+generate_and_send_post_request (int fd_com_port, int socket, const char *host,
+				uint32_t host_length, const char *port,
 				const char *uri, uint32_t uri_length,
 				uint8_t version, const char *boundary,
-				uint32_t content_length) {
+				int content_type, uint32_t content_length,
+				int com_ms) {
 	char full_host[host_length + 6];
 	char referer_name[8];
 	char referer_value[21 + uri_length + 1];
@@ -368,7 +382,8 @@ generate_and_send_post_request (int socket, const char *host,
 		return -1;
 	}
 
-	result = write_data (socket, request, request_size);
+	result =
+	  write_data (fd_com_port, socket, request, request_size, com_ms);
 	if (request_size == result) {
 		result = 0;
 	}
@@ -377,11 +392,13 @@ generate_and_send_post_request (int socket, const char *host,
 }
 
 static int
-generate_and_send_post_content_header (int socket, const char *filename,
+generate_and_send_post_content_header (int fd_com_port, int socket,
+				       const char *filename,
 				       uint8_t filename_length,
 				       const char *form_name,
 				       uint8_t form_name_length,
-				       const char *boundary) {
+				       const char *boundary, int content_type,
+				       int com_ms) {
 	const int header_size =
 	  100 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + filename_length +
 	  form_name_length + 1;
@@ -411,7 +428,8 @@ generate_and_send_post_content_header (int socket, const char *filename,
 		return -1;
 	}
 
-	result = write_data (socket, header, header_size - 1);
+	result =
+	  write_data (fd_com_port, socket, header, header_size - 1, com_ms);
 	if (header_size - 1 == result) {
 		result = 0;
 	}
@@ -420,7 +438,9 @@ generate_and_send_post_content_header (int socket, const char *filename,
 }
 
 static int
-generate_and_send_post_content_trailer (int socket, const char *boundary) {
+generate_and_send_post_content_trailer (int fd_com_port, int socket,
+					const char *boundary, int content_type,
+					int com_ms) {
 	const int trailer_size =
 	  8 + BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1;
 	char trailer[trailer_size];
@@ -439,7 +459,8 @@ generate_and_send_post_content_trailer (int socket, const char *boundary) {
 		return -1;
 	}
 
-	result = write_data (socket, trailer, trailer_size - 1);
+	result =
+	  write_data (fd_com_port, socket, trailer, trailer_size - 1, com_ms);
 	if (trailer_size - 1 == result) {
 		result = 0;
 	}
@@ -448,7 +469,7 @@ generate_and_send_post_content_trailer (int socket, const char *boundary) {
 }
 
 static int
-send_file_data (int fd, int socket) {
+send_file_data (int fd_com_port, int fd, int socket, int com_ms) {
 	char buffer[BUFFER_SIZE];
 	int bytes_read;
 	int bytes_written;
@@ -457,7 +478,8 @@ send_file_data (int fd, int socket) {
 	result = 0;
 	bytes_read = read (fd, buffer, BUFFER_SIZE);
 	while (bytes_read > 0) {
-		bytes_written = write_data (socket, buffer, bytes_read);
+		bytes_written =
+		  write_data (fd_com_port, socket, buffer, bytes_read, com_ms);
 
 		if (bytes_written != bytes_read) {
 			result = -1;
@@ -475,80 +497,107 @@ send_file_data (int fd, int socket) {
 }
 
 static int
-receive_and_decode_post (int socket) {
-	int timeout_count;
-	struct http_response response;
-	uint8_t bytes_read;
-	uint8_t buff[18];
+receive_and_decode_post (int fd_com_port, int socket, int http_ms) {
+	/*
+	 * HTTP/1.X YYY [response_text]\r\n
+	 * Header: Value\r\n ...
+	 * \r\n
+	 */
+
+	uint16_t buff_idx;
+	uint8_t buff[BUFFER_SIZE + 1];
 	int result;
-	char the_void;
+	char length_name[15];
+	char length_value[17];
+	struct http_header headers[1];
+	struct http_response response;
+	uint32_t discard_size;
+	int current_read_size;
 
-	timeout_count = 10;
-	response.header_count = 0;
-	bytes_read = 0;
-
-	/* Until data apears on the socket */
-	while (0 == bytes_read) {
-		if (0 == timeout_count) {
-			return -1;
+	buff_idx = 0;
+	while ((buff_idx < 4) ||
+	       (0 != strncmp (&(buff[buff_idx - 4]), "\r\n\r\n", 4)) &&
+	       (buff_idx < BUFFER_SIZE)) {
+		result =
+		  read_data (fd_com_port, socket, buff + buff_idx, 1, http_ms);
+		if (result <= 0) {
+			++buff_idx;
+			break;
 		}
-		bytes_read = read_data (socket, buff, 13, timeout);
-		--timeout_count;
+		++buff_idx;
 	}
+	buff[buff_idx] = '\0';
 
-	if (bytes_read < 0) {
+	if (buff_idx < 13) {
 		return -1;
 	}
 
-	/* Until relevant info is read */
-	timeout_count = 5;
-	while (bytes_read != 13) {
-		if (0 == timeout_count) {
-			return -1;
-		}
-		result =
-		  read_data (socket, buff + bytes_read, 13 - bytes_read,
-			     timeout);
-		if (result < 0) {
-			return -1;
-		}
-		bytes_read += result;
-		--timeout_count;
-	}
-
-	/* Discard unneeded data */
-	while (0 != result) {
-		result = read_data (socket, &the_void, 1, timeout);
-		if (result < 0) {
-			return -1;
+	if (0 != strncmp (&(buff[buff_idx - 4]), "\r\n\r\n", 4)) {
+		if (buff_idx + 3 > BUFFER_SIZE) {
+			/* -- */
+			buff[buff_idx] = '\0';
+			buff[buff_idx - 1] = '\n';
+			buff[buff_idx - 2] = '\r';
+			buff[buff_idx - 3] = '\n';
+			buff[buff_idx - 4] = '\r';
+		} else {
+			/* ++ */
+			buff[buff_idx] = '\r';
+			buff[buff_idx + 1] = '\n';
+			buff[buff_idx + 2] = '\r';
+			buff[buff_idx + 3] = '\n';
+			buff[buff_idx + 4] = '\0';
 		}
 	}
 
-	/* Put nessesary symbols for the parser */
-	buff[13] = '\r';
-	buff[14] = '\n';
-	buff[15] = '\r';
-	buff[16] = '\n';
-	buff[17] = '\0';
+	/* Fill header name and set to search for it */
+	strcpy (length_name, "Content-Length");
+	length_value[0] = '\0';
+	headers[0].name = length_name;
+	headers[0].value = length_value;
+	response.header_count = 1;
+	response.headers = headers;
 
 	result = decode_response (buff, &response, NULL);
+	if (0 == result) {
+		if (2 != (response.code / 100)) {
+			result = response.code;
+		} else {
+			/* Find how many bytes we need to read and discard */
+			discard_size = 0;
+			buff_idx = 0;
+			for (buff_idx = 0; length_value[buff_idx] != '\0';
+			     ++buff_idx) {
+				discard_size *= 10;
+				discard_size += length_value[buff_idx] - '0';
+			}
 
-	if (0 != result) {
-		return result;
+			current_read_size = BUFFER_SIZE;
+			while (discard_size > 0) {
+				if (discard_size < BUFFER_SIZE) {
+					current_read_size = discard_size;
+				}
+
+				result =
+				  read_data (fd_com_port, socket, buff,
+					     current_read_size, http_ms);
+				if (result < 0) {
+					/* MAYBE RETURN -1 ??? FAILED DISCARD OF UNNEEDED DATA ??? */
+					break;
+				}
+				discard_size -= result;
+			}
+			result = 0;
+		}
 	}
-
-	if (2 != (response.code / 100)) {
-		result = response.code;
-	}
-
 	return result;
 }
 
 static int
-generate_and_send_get_request (int socket, const char *host,
-			       uint32_t host_length, uint16_t port,
+generate_and_send_get_request (int fd_com_port, int socket, const char *host,
+			       uint32_t host_length, const char *port,
 			       const char *uri, uint32_t uri_length,
-			       uint8_t version) {
+			       uint8_t version, int com_ms) {
 	char full_host[22];
 	char conn_name[11];
 	char conn_value[11];
@@ -601,7 +650,8 @@ generate_and_send_get_request (int socket, const char *host,
 		return -1;
 	}
 
-	result = write_data (socket, request, request_size);
+	result =
+	  write_data (fd_com_port, socket, request, request_size, com_ms);
 	if (request_size == result) {
 		result = 0;
 	}
@@ -610,10 +660,10 @@ generate_and_send_get_request (int socket, const char *host,
 }
 
 static int
-receive_and_decode_get (int socket, const char *filepath, uint32_t *filesize) {
-	int timeout_count;
+receive_and_decode_get (int fd_com_port, int socket, const char *filepath,
+			uint32_t *filesize, int http_ms) {
 	uint16_t buff_idx;
-	uint8_t buff[1025];
+	uint8_t buff[BUFFER_SIZE + 1];
 	int result;
 	char length_name[15];
 	char length_value[17];
@@ -627,36 +677,26 @@ receive_and_decode_get (int socket, const char *filepath, uint32_t *filesize) {
 	 * \r\n
 	 */
 
-	if (NULL == filepath) {
-		return -1;
-	}
-
-	timeout_count = 10;
 	buff_idx = 0;
 	while ((buff_idx < 4) ||
 	       (0 != strncmp (&(buff[buff_idx - 4]), "\r\n\r\n", 4)) &&
-	       (buff_idx < 1024)) {
-		result = read_data (socket, buff + buff_idx, 1, timeout);
-		if (result < 0) {
-			return result;
-		} else if (0 == result) {
-			if (0 != timeout_count) {
-				--timeout_count;
-			} else {
-				return -1;
-			}
-		} else {
-			timeout_count = 10;
-			buff_idx += result;
+	       (buff_idx < BUFFER_SIZE)) {
+		result =
+		  read_data (fd_com_port, socket, buff + buff_idx, 1, http_ms);
+		if (result <= 0) {
+			return -1;
 		}
+		++buff_idx;
 	}
 	buff[buff_idx] = '\0';
+
 	if (0 != strncmp (&(buff[buff_idx - 4]), "\r\n\r\n", 4)) {
 		return -1;
 	}
 
 	/* Fill header name and set to search for it */
 	strcpy (length_name, "Content-Length");
+	length_value[0] = '\0';
 	headers[0].name = length_name;
 	headers[0].value = length_value;
 	response.header_count = 1;
@@ -667,12 +707,12 @@ receive_and_decode_get (int socket, const char *filepath, uint32_t *filesize) {
 		if (2 != (response.code / 100)) {
 			result = response.code;
 		} else {
-			filesize = 0;
+			filesize_local = 0;
+			buff_idx = 0;
 			for (buff_idx = 0; length_value[buff_idx] != '\0';
 			     ++buff_idx) {
 				filesize_local *= 10;
-				filesize_local =
-				  filesize + length_value[buff_idx] - '0';
+				filesize_local += length_value[buff_idx] - '0';
 			}
 
 			if (NULL != filesize) {
@@ -680,18 +720,21 @@ receive_and_decode_get (int socket, const char *filepath, uint32_t *filesize) {
 			}
 
 			result =
-			  save_file (socket, filepath, filesize, timeout);
+			  save_file (fd_com_port, socket, filepath,
+				     filesize_local, http_ms);
 		}
 	}
 	return result;
 }
 
 static int
-save_file (int socket, const char *filepath, uint32_t filesize, int ms) {
+save_file (int fd_com_port, int socket, const char *filepath, uint32_t filesize,
+	   int http_ms) {
 	int result;
 	uint8_t name_idx;
 	int fd;
-	uint8_t buffer[1024];
+	int to_read;
+	uint8_t buffer[BUFFER_SIZE];
 	int bytes_written;
 
 	if (NULL == filepath) {
@@ -704,8 +747,13 @@ save_file (int socket, const char *filepath, uint32_t filesize, int ms) {
 	}
 
 	result = 1;
+	to_read = BUFFER_SIZE;
 	while (result > 0 && (0 != filesize)) {
-		result = read_data (socket, buffer, 1024, ms);
+		if (filesize < BUFFER_SIZE) {
+			to_read = filesize;
+		}
+		result =
+		  read_data (fd_com_port, socket, buffer, to_read, http_ms);
 		if (result > 0) {
 			bytes_written = write (fd, buffer, result);
 			if ((bytes_written != result) ||
@@ -725,20 +773,30 @@ save_file (int socket, const char *filepath, uint32_t filesize, int ms) {
 
 /* Header file function definitions */
 int
-upload_file (const char *filepath, const char *form_name, const char *host,
-	     uint16_t port, const char *uri) {
+upload_file (const char *com_port, const char *filepath, const char *form_name,
+	     const char *host, const char *port, const char *uri,
+	     int content_type, int com_ms, int http_ms) {
 	int error;
 	char boundary[BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1];
+	int fd_com_port;
 	char filename[MAX_FILENAME_LENGTH + 1];
 	int file_descriptor;
 	int64_t file_size;
 	int socket_descriptor;
+
+	if (NULL == com_port) {
+		return -1;
+	}
 
 	if (NULL == filepath) {
 		return -1;
 	}
 
 	if (NULL == host) {
+		return -1;
+	}
+
+	if (NULL == port) {
 		return -1;
 	}
 
@@ -762,33 +820,43 @@ upload_file (const char *filepath, const char *form_name, const char *host,
 		}
 	}
 
+	fd_com_port = open_port (com_port);
+	if (fd_com_port < 0) {
+		return -1;
+	}
+
 	/* Preparations */
 	error = get_filename_from_path (filename, filepath);
 	if (0 != error) {
+		close_port (fd_com_port);
 		return -1;
 	}
 
 	file_descriptor = open (filepath, O_RDONLY);
 	if (file_descriptor < 0) {
+		close_port (fd_com_port);
 		return -1;
 	}
 
 	file_size = get_file_size (file_descriptor);
 	if (file_size < 0) {
 		close (file_descriptor);
+		close_port (fd_com_port);
 		return -1;
 	}
 
 	/* Connection */
-	socket_descriptor = open_socket ();
+	socket_descriptor = open_socket (fd_com_port, com_ms);
 	if (socket_descriptor < 0) {
 		close (file_descriptor);
+		close_port (fd_com_port);
 		return -1;
 	}
 
-	error = connect_to_addr (socket_descriptor, host, port);
+	error =
+	  connect_to_addr (fd_com_port, socket_descriptor, host, port, com_ms);
 	if (0 != error) {
-		close_socket (socket_descriptor);
+		close_socket (fd_com_port, socket_descriptor, com_ms);
 		close (file_descriptor);
 		return -1;
 	}
@@ -796,76 +864,100 @@ upload_file (const char *filepath, const char *form_name, const char *host,
 	/* Data sending */
 	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
 		error =
-		  generate_and_send_post_request (socket_descriptor, host,
+		  generate_and_send_post_request (fd_com_port,
+						  socket_descriptor, host,
 						  strlen (host), port, uri,
 						  strlen (uri), 1, boundary,
+						  content_type,
 						  file_size +
 						  get_content_header_size
 						  (strlen (filename),
-						   strlen (form_name)) +
-						  get_content_trailer_size ());
+						   strlen (form_name),
+						   content_type) +
+						  get_content_trailer_size
+						  (content_type), com_ms);
 	} else {
 		error =
-		  generate_and_send_post_request (socket_descriptor, host,
+		  generate_and_send_post_request (fd_com_port,
+						  socket_descriptor, host,
 						  strlen (host), port, uri,
 						  strlen (uri), 1, boundary,
-						  file_size);
+						  content_type, file_size,
+						  com_ms);
 	}
 
 	if (0 != error) {
-		close_socket (socket_descriptor);
+		close_socket (fd_com_port, socket_descriptor, com_ms);
 		close (file_descriptor);
+		close_port (fd_com_port);
 		return -1;
 	}
 
 	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
 		error =
-		  generate_and_send_post_content_header (socket_descriptor,
+		  generate_and_send_post_content_header (fd_com_port,
+							 socket_descriptor,
 							 filename,
 							 strlen (filename),
 							 form_name,
 							 strlen (form_name),
-							 boundary);
+							 boundary, content_type,
+							 com_ms);
 		if (0 != error) {
-			close_socket (socket_descriptor);
+			close_socket (fd_com_port, socket_descriptor, com_ms);
 			close (file_descriptor);
+			close_port (fd_com_port);
 			return -1;
 		}
 	}
 
-	error = send_file_data (file_descriptor, socket_descriptor);
+	error =
+	  send_file_data (fd_com_port, file_descriptor, socket_descriptor,
+			  com_ms);
 	if (0 != error) {
-		close_socket (socket_descriptor);
+		close_socket (fd_com_port, socket_descriptor, com_ms);
 		close (file_descriptor);
+		close_port (fd_com_port);
 		return -1;
 	}
 
 	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
 		error =
-		  generate_and_send_post_content_trailer (socket_descriptor,
-							  boundary);
+		  generate_and_send_post_content_trailer (fd_com_port,
+							  socket_descriptor,
+							  boundary,
+							  content_type, com_ms);
 		if (0 != error) {
-			close_socket (socket_descriptor);
+			close_socket (fd_com_port, socket_descriptor, com_ms);
 			close (file_descriptor);
+			close_port (fd_com_port);
 			return -1;
 		}
 	}
 
 	/* Response Receiving */
-	error = receive_and_decode_post (socket_descriptor);
+	error =
+	  receive_and_decode_post (fd_com_port, socket_descriptor, http_ms);
 
 	/* Cleanup */
-	close_socket (socket_descriptor);
+	close_socket (fd_com_port, socket_descriptor, com_ms);
 	close (file_descriptor);
+	close_port (fd_com_port);
 
 	return error;
 }
 
 int
-get_resource (const char *filepath, uint32_t *filesize, const char *host,
-	      uint16_t port, const char *uri) {
-	int result;
+get_resource (const char *com_port, const char *filepath, uint32_t *filesize,
+	      const char *host, const char *port, const char *uri, int com_ms,
+	      int http_ms) {
+	int fd_com_port;
 	int socket;
+	int result;
+
+	if (NULL == com_port) {
+		return -1;
+	}
 
 	if (NULL == filepath) {
 		return -1;
@@ -873,39 +965,51 @@ get_resource (const char *filepath, uint32_t *filesize, const char *host,
 	if (NULL == host) {
 		return -1;
 	}
-	if (0 == port) {
+	if (NULL == port) {
 		return -1;
 	}
 	if (NULL == uri) {
 		return -1;
 	}
 
-	/* Connection */
-	socket = open_socket ();
-	if (socket < 0) {
+	fd_com_port = open_port (com_port);
+	if (fd_com_port < 0) {
 		return -1;
 	}
 
-	result = connect_to_addr (socket, host, port);
+	/* Connection */
+	socket = open_socket (fd_com_port, com_ms);
+	if (socket < 0) {
+		close_port (fd_com_port);
+		return -1;
+	}
+
+	result = connect_to_addr (fd_com_port, socket, host, port, com_ms);
 	if (0 != result) {
-		close_socket (socket);
+		close_socket (fd_com_port, socket, com_ms);
+		close_port (fd_com_port);
 		return -1;
 	}
 
 	/* Data sending */
 	result =
-	  generate_and_send_get_request (socket, host, strlen (host), port, uri,
-					 strlen (uri), 1);
+	  generate_and_send_get_request (fd_com_port, socket, host,
+					 strlen (host), port, uri, strlen (uri),
+					 1, com_ms);
 	if (0 != result) {
-		close_socket (socket);
+		close_socket (fd_com_port, socket, com_ms);
+		close_port (fd_com_port);
 		return -1;
 	}
 
 	/* Response Receiving */
-	result = receive_and_decode_get (socket, filepath, filesize);
+	result =
+	  receive_and_decode_get (fd_com_port, socket, filepath, filesize,
+				  http_ms);
 
 	/* Cleanup */
-	close_socket (socket);
+	close_socket (fd_com_port, socket, com_ms);
+	close_port (fd_com_port);
 	return result;
 }
 
@@ -931,23 +1035,4 @@ uint32_t
 generate_number () {
 	current_number = (current_number * multiplicative_part) + additive_part;
 	return current_number;
-}
-
-void
-client_set_timeout (int ms) {
-	if (timeout > 0) {
-		timeout = ms;
-	} else {
-		timeout = 2500;
-	}
-}
-
-int
-set_content_type (int type) {
-	if (type > SHTTP_CONTTYPE_MULTIPART_FORMDATA) {
-		return -1;
-	}
-
-	content_type = type;
-	return 0;
 }

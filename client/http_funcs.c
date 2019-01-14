@@ -268,7 +268,7 @@ decode_response (const char *response, struct http_response *dest,
 						 response_index);
 					dest->headers[idx].
 					  value[delimiter_index -
-						response_index + 1] = '\0';
+						response_index] = '\0';
 					break;
 				}
 			}

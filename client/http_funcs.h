@@ -38,8 +38,10 @@ int decode_response (const char *_response, struct http_response *_dest,
  * _form_name - pointer to a string containing the name of the field in the form
  * 		to which we upload
  * _boundary - pointer to a string containing the boundary used for separation
- * _header - pointer where the header string will be stored. It should have sufficient space
- * _header_size - pointer to a uint32_t where the length of the header string will be stored if not NULL
+ * _header - pointer where the header string will be stored. It should have
+ * 		sufficient space
+ * _header_size - pointer to a uint32_t where the length of the header string
+ * 		will be stored if not NULL
  */
 int build_upload_payload_header (const char *_filename, const char *_form_name,
 				 const char *_boundary, char *_header,

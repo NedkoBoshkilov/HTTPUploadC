@@ -1,13 +1,39 @@
 #include <string.h>
 
 #include "adapter.h"
-#include "comms.h"
 #include "http_client.h"
 
-/* GLOBALS */
-char *host;
-char *uri;
-uint16_t port;
+static int chop_url (char *_url, char **_host, char *_port, char **_uri);
+
+static int
+chop_url (char *url, char **host, char *port, char **uri) {
+	char *temp;
+
+	if (NULL == url) {
+		return -1;
+	}
+	if (NULL == port) {
+		return -1;
+	}
+
+	if (0 != strncmp (url, "http", 4)) {
+		return -1;
+	}
+
+	/* Set host beginning */
+	*host = strchr (url, ':') + 3;
+	/* URI beginning */
+	*uri = strchr (*host, '/');
+	/* Find host and port delimiter and turn it into \0 terminator */
+	temp = strchr (*host, ':');
+	*temp = '\0';
+	/* Port beginning */
+	++temp;
+	/* Copy the port string and put \0 terminator */
+	strncpy (port, temp, *uri - temp);
+	port[*uri - temp] = '\0';
+	return 0;
+}
 
 int
 configure_shttp (const char *com_port) {
@@ -15,58 +41,61 @@ configure_shttp (const char *com_port) {
 }
 
 int
-configure_shttp_conttype (int content_type, const char *com_port) {
-	return set_content_type (content_type);
-}
+post_file_shttp (const char *com_port, char *filepath, char *url,
+		 int content_type, int timeout, int post_timeout) {
+	int result;
+	char *host;
+	char port[6];
+	char *uri;
 
-
-int
-set_url_shttp (char *url, int timeout, const char *com_port) {
-	char *port_str;
-	uint8_t port_length;
-	int i;
-
-	host = strchr (url, ':') + 3;
-	*(strchr (host, ':')) = '\0';
-	port_str = host + strlen (host) + 1;
-	uri = strchr (port_str, '/');
-	port_length = uri - port_str;
-
-	port = 0;
-	for (i = 0; i < port_length; ++i) {
-		port *= 10;
-		port += port_str[i] - '0';
+	if (NULL == com_port) {
+		return -1;
+	}
+	if (NULL == filepath) {
+		return -1;
+	}
+	if (NULL == url) {
+		return -1;
 	}
 
-	return 0;
-}
-
-int
-post_file_shttp (char *filepath, int timeout, int post_timeout,
-		 const char *com_port) {
-	int result;
-
-	client_set_timeout (timeout * 1000);
-	comms_set_timeout (post_timeout * 1000);
-	set_port (com_port);
-	result = upload_file (filepath, NULL, host, port, uri);
-	set_port (NULL);
+	result = chop_url (url, &host, port, &uri);
+	if (0 == result) {
+		result =
+		  upload_file (com_port, filepath, NULL, host, port, uri,
+			       content_type, post_timeout, timeout);
+	}
 	*(strchr (host, '\0')) = ':';
 	return result;
 }
 
 int
-get_file_shttp (char *filepath, size_t *filesize, int timeout, int get_timeout,
-		const char *com_port) {
-	uint32_t filesize_local;
+get_file_shttp (const char *com_port, char *filepath, char *url,
+		size_t * filesize, int timeout, int get_timeout) {
 	int result;
+	char *host;
+	char port[6];
+	char *uri;
+	uint32_t filesize_local;
 
-	client_set_timeout (timeout * 1000);
-	comms_set_timeout (get_timeout * 1000);
-	set_port (com_port);
-	result = get_resource (filepath, &filesize_local, host, port, uri);
-	set_port (NULL);
-	*filesize = filesize_local;
+	if (NULL == com_port) {
+		return -1;
+	}
+	if (NULL == filepath) {
+		return -1;
+	}
+	if (NULL == url) {
+		return -1;
+	}
+
+	result = chop_url (url, &host, port, &uri);
+	if (0 == result) {
+		result =
+		  get_resource (com_port, filepath, &filesize_local, host, port,
+				uri, get_timeout, timeout);
+		if (NULL != filesize) {
+			*filesize = filesize_local;
+		}
+	}
 	*(strchr (host, '\0')) = ':';
 	return result;
 }
