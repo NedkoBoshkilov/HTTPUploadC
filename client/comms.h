@@ -73,8 +73,13 @@ int64_t write_data (int _fd, int _socket, void *_buffer, uint32_t _size,
  * buffer - pointer to where the data will be stored
  * size - number of bytes to be read
  * ms - timeout in ms after which it's assumed there's no data
+ * msg_buffer - buffer to be used for block reading between calls
+ * msg_size - indicates the last read block size
+ * msg_idx - indicates the current position in the block
+ * max_msg_size - the size of the block buffer
  */
-int64_t read_data (int _fd, int _socket, void *_buffer, uint32_t _size,
-		   int _ms);
+int64_t read_data (int _fd, int _socket, void *_buffer, uint32_t _size, int _ms,
+		   char *_msg_buffer, int *_msg_size, int *_msg_idx,
+		   const int _max_msg_size);
 
 #endif // COMMS_H_

@@ -25,6 +25,9 @@
 /* Defines the size of the chunks for transfering the file */
 #define BUFFER_SIZE 1024
 
+/* Defines the maximum size of the block read buffers */
+#define MAX_BLOCK_SIZE 1460
+
 /* 
  * TODO: FIND A PROPER DEFINITION
  * Max length of a filename
@@ -92,10 +95,11 @@ static int generate_and_send_get_request (int _fd_com_port, int _socket,
 					  uint32_t _uri_length,
 					  uint8_t _version, int _com_ms);
 static int receive_and_decode_get (int _fd_com_port, int _socket,
-				   const char *_filepath, uint32_t *_filesize,
+				   const char *_filepath, uint32_t * _filesize,
 				   int _http_ms);
 static int save_file (int _fd_com_port, int _socket, const char *_filepath,
-		      uint32_t _filesize, int _http_ms);
+		      uint32_t _filesize, int _http_ms, char *_msg_buffer,
+		      int *_msg_size, int *_msg_idx, const int _max_msg_size);
 
 /* DEFINITIONS */
 static int
@@ -506,6 +510,9 @@ receive_and_decode_post (int fd_com_port, int socket, int http_ms) {
 
 	uint16_t buff_idx;
 	uint8_t buff[BUFFER_SIZE + 1];
+	char msg_buffer[MAX_BLOCK_SIZE];
+	int msg_size = 0;
+	int msg_idx = 0;
 	int result;
 	char length_name[15];
 	char length_value[17];
@@ -519,7 +526,8 @@ receive_and_decode_post (int fd_com_port, int socket, int http_ms) {
 	       (0 != strncmp (&(buff[buff_idx - 4]), "\r\n\r\n", 4)) &&
 	       (buff_idx < BUFFER_SIZE)) {
 		result =
-		  read_data (fd_com_port, socket, buff + buff_idx, 1, http_ms);
+		  read_data (fd_com_port, socket, buff + buff_idx, 1, http_ms,
+			     msg_buffer, &msg_size, &msg_idx, MAX_BLOCK_SIZE);
 		if (result <= 0) {
 			++buff_idx;
 			break;
@@ -580,7 +588,9 @@ receive_and_decode_post (int fd_com_port, int socket, int http_ms) {
 
 				result =
 				  read_data (fd_com_port, socket, buff,
-					     current_read_size, http_ms);
+					     current_read_size, http_ms,
+					     msg_buffer, &msg_size, &msg_idx,
+					     MAX_BLOCK_SIZE);
 				if (result < 0) {
 					/* MAYBE RETURN -1 ??? FAILED DISCARD OF UNNEEDED DATA ??? */
 					break;
@@ -661,9 +671,12 @@ generate_and_send_get_request (int fd_com_port, int socket, const char *host,
 
 static int
 receive_and_decode_get (int fd_com_port, int socket, const char *filepath,
-			uint32_t *filesize, int http_ms) {
+			uint32_t * filesize, int http_ms) {
 	uint16_t buff_idx;
 	uint8_t buff[BUFFER_SIZE + 1];
+	char msg_buffer[MAX_BLOCK_SIZE];
+	int msg_size = 0;
+	int msg_idx = 0;
 	int result;
 	char length_name[15];
 	char length_value[17];
@@ -682,7 +695,8 @@ receive_and_decode_get (int fd_com_port, int socket, const char *filepath,
 	       (0 != strncmp (&(buff[buff_idx - 4]), "\r\n\r\n", 4)) &&
 	       (buff_idx < BUFFER_SIZE)) {
 		result =
-		  read_data (fd_com_port, socket, buff + buff_idx, 1, http_ms);
+		  read_data (fd_com_port, socket, buff + buff_idx, 1, http_ms,
+			     msg_buffer, &msg_size, &msg_idx, MAX_BLOCK_SIZE);
 		if (result <= 0) {
 			return -1;
 		}
@@ -721,7 +735,8 @@ receive_and_decode_get (int fd_com_port, int socket, const char *filepath,
 
 			result =
 			  save_file (fd_com_port, socket, filepath,
-				     filesize_local, http_ms);
+				     filesize_local, http_ms, msg_buffer,
+				     &msg_size, &msg_idx, MAX_BLOCK_SIZE);
 		}
 	}
 	return result;
@@ -729,7 +744,8 @@ receive_and_decode_get (int fd_com_port, int socket, const char *filepath,
 
 static int
 save_file (int fd_com_port, int socket, const char *filepath, uint32_t filesize,
-	   int http_ms) {
+	   int http_ms, char *msg_buffer, int *msg_size, int *msg_idx,
+	   const int max_msg_size) {
 	int result;
 	uint8_t name_idx;
 	int fd;
@@ -753,7 +769,8 @@ save_file (int fd_com_port, int socket, const char *filepath, uint32_t filesize,
 			to_read = filesize;
 		}
 		result =
-		  read_data (fd_com_port, socket, buffer, to_read, http_ms);
+		  read_data (fd_com_port, socket, buffer, to_read, http_ms,
+			     msg_buffer, msg_size, msg_idx, max_msg_size);
 		if (result > 0) {
 			bytes_written = write (fd, buffer, result);
 			if ((bytes_written != result) ||
@@ -948,7 +965,7 @@ upload_file (const char *com_port, const char *filepath, const char *form_name,
 }
 
 int
-get_resource (const char *com_port, const char *filepath, uint32_t *filesize,
+get_resource (const char *com_port, const char *filepath, uint32_t * filesize,
 	      const char *host, const char *port, const char *uri, int com_ms,
 	      int http_ms) {
 	int fd_com_port;

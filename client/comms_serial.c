@@ -496,13 +496,10 @@ write_data (int fd, int dest, void *buffer, uint32_t size, int ms) {
 	return size;
 }
 
-/* CONTAINS STATIC VARS !!! */
 int64_t
-read_data (int fd, int src, void *buffer, uint32_t size, int ms) {
-	static char msg_buffer[1460];
-	static int msg_size = 0;
-	static int msg_idx = 0;
-	const int max_msg_size = 1460;
+read_data (int fd, int src, void *buffer, uint32_t size, int ms,
+	   char *msg_buffer, int *msg_size, int *msg_idx,
+	   const int max_msg_size) {
 	int64_t result;
 	bool needs_more_blocks;
 	int buff_idx;
@@ -525,30 +522,30 @@ read_data (int fd, int src, void *buffer, uint32_t size, int ms) {
 	needs_more_blocks = true;
 	buff_idx = 0;
 	while (needs_more_blocks) {
-		if (msg_idx == msg_size) {
-			msg_size = read_next_block (fd, msg_buffer, ms);
-			msg_idx = 0;
-			if (msg_size > max_msg_size) {
+		if ((*msg_idx) == (*msg_size)) {
+			(*msg_size) = read_next_block (fd, msg_buffer, ms);
+			(*msg_idx) = 0;
+			if ((*msg_size) > max_msg_size) {
 				return -1;
 			}
 		}
 
-		if (msg_size < 0) {
+		if ((*msg_size) < 0) {
 			return -1;
-		} else if (0 == msg_size) {
+		} else if (0 == (*msg_size)) {
 			break;
 		}
 
-		if (size <= result + msg_size - msg_idx) {
+		if (size <= result + (*msg_size) - (*msg_idx)) {
 			copy_count = size - result;
 			needs_more_blocks = false;
 		} else {
-			copy_count = msg_size - msg_idx;
+			copy_count = (*msg_size) - (*msg_idx);
 		}
 
 		for (i = 0; i < copy_count; ++i) {
-			((uint8_t *) buffer)[buff_idx] = msg_buffer[msg_idx];
-			++msg_idx;
+			((uint8_t *) buffer)[buff_idx] = msg_buffer[*msg_idx];
+			++(*msg_idx);
 			++buff_idx;
 		}
 		result += copy_count;

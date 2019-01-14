@@ -2,17 +2,6 @@
 
 #include "http_funcs.h"
 
-static const char line_delimiter[] = "\r\n";
-static const char http_version_text[] = "HTTP/1.";
-static const char host_header_name[] = "Host";
-static const char header_name_value_delimiter = ':';
-static const char boundary_delimiter[] = "--";
-static const char content_header_part1[] =
-  "Content-Disposition: form-data; name=\"";
-static const char content_header_part2[] = "\"; filename=\"";
-static const char content_header_part3[] =
-  "Content-Type: application/octet-stream";
-
 static bool
 is_whitespace (const char test) {
 	bool result;
@@ -30,6 +19,7 @@ static uint32_t
 next_line_start (const char *buff, uint32_t start) {
 	uint32_t result;
 	bool found;
+	const char line_delimiter[] = "\r\n";
 
 	if (NULL == buff) {
 		return start;
@@ -59,7 +49,7 @@ next_delimiter (const char *buff, uint32_t start) {
 	result = start;
 	found = false;
 	while (!found) {
-		if (header_name_value_delimiter == buff[result]) {
+		if (':' == buff[result]) {
 			found = true;
 		}
 		++result;
@@ -69,7 +59,7 @@ next_delimiter (const char *buff, uint32_t start) {
 
 int
 build_request (const struct http_request *request, char *dest,
-	       uint32_t *request_size) {
+	       uint32_t * request_size) {
 	/*
 	 * Format of the request:
 	 * [method] [uri] HTTP/1.X\r\n
@@ -78,6 +68,7 @@ build_request (const struct http_request *request, char *dest,
 	 * \r\n
 	 */
 
+	const char line_delimiter[] = "\r\n";
 	struct http_header current_header;
 	uint8_t idx_header;
 
@@ -102,7 +93,7 @@ build_request (const struct http_request *request, char *dest,
 	strcat (dest, " ");
 	strcat (dest, request->uri);
 	strcat (dest, " ");
-	strcat (dest, http_version_text);
+	strcat (dest, "HTTP/1.");
 
 	if (request->is_version11) {
 		strcat (dest, "1");
@@ -112,10 +103,10 @@ build_request (const struct http_request *request, char *dest,
 	strcat (dest, line_delimiter);
 
 	/* Set host header */
-	strcat (dest, host_header_name);
+	strcat (dest, "Host");
 
 	dest[strlen (dest) + 1] = '\0';
-	dest[strlen (dest)] = header_name_value_delimiter;
+	dest[strlen (dest)] = ':';
 
 	strcat (dest, request->host);
 	strcat (dest, line_delimiter);
@@ -136,7 +127,7 @@ build_request (const struct http_request *request, char *dest,
 		strcat (dest, current_header.name);
 
 		dest[strlen (dest) + 1] = '\0';
-		dest[strlen (dest)] = header_name_value_delimiter;
+		dest[strlen (dest)] = ':';
 
 		strcat (dest, current_header.value);
 		strcat (dest, line_delimiter);
@@ -152,8 +143,10 @@ build_request (const struct http_request *request, char *dest,
 
 int
 decode_response (const char *response, struct http_response *dest,
-		 uint32_t *headers_length) {
+		 uint32_t * headers_length) {
 	bool valid;
+	const char line_delimiter[] = "\r\n";
+	const char http_version_text[] = "HTTP/1.";
 	uint32_t response_index;
 	uint32_t idx;
 	uint32_t line_lenght;
@@ -285,7 +278,7 @@ decode_response (const char *response, struct http_response *dest,
 int
 build_upload_payload_header (const char *filename, const char *form_name,
 			     const char *boundary, char *header,
-			     uint32_t *header_size) {
+			     uint32_t * header_size) {
 	/*
 	 * Format of the header:
 	 * --[boundary]\r\n
@@ -293,6 +286,13 @@ build_upload_payload_header (const char *filename, const char *form_name,
 	 * Content-Type: application/octet-stream\r\n
 	 * \r\n
 	 */
+
+	const char line_delimiter[] = "\r\n";
+	const char content_header_part1[] =
+	  "Content-Disposition: form-data; name=\"";
+	const char content_header_part2[] = "\"; filename=\"";
+	const char content_header_part3[] =
+	  "Content-Type: application/octet-stream";
 
 	if (NULL == filename) {
 		return -1;
@@ -310,7 +310,7 @@ build_upload_payload_header (const char *filename, const char *form_name,
 		return -1;
 	}
 
-	strcpy (header, boundary_delimiter);
+	strcpy (header, "--");
 	strcat (header, boundary);
 	strcat (header, line_delimiter);
 	strcat (header, content_header_part1);
@@ -332,11 +332,13 @@ build_upload_payload_header (const char *filename, const char *form_name,
 
 int
 build_upload_payload_trailer (const char *boundary, char *trailer,
-			      uint32_t *trailer_size) {
+			      uint32_t * trailer_size) {
 	/*
 	 * Format of the trailer:
 	 * \r\n--[boundary]--\r\n
 	 */
+
+	const char line_delimiter[] = "\r\n";
 
 	if (NULL == boundary) {
 		return -1;
@@ -347,9 +349,9 @@ build_upload_payload_trailer (const char *boundary, char *trailer,
 	}
 
 	strcpy (trailer, line_delimiter);
-	strcat (trailer, boundary_delimiter);
+	strcat (trailer, "--");
 	strcat (trailer, boundary);
-	strcat (trailer, boundary_delimiter);
+	strcat (trailer, "--");
 	strcat (trailer, line_delimiter);
 
 	if (NULL != trailer_size) {
