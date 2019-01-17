@@ -85,7 +85,7 @@ static int generate_and_send_post_content_trailer (int _fd_com_port,
 						   int _com_ms);
 static int send_file_data (int _fd_com_port, int _fd, int _socket, int _com_ms);
 static int receive_and_decode_post (int _fd_com_port, int _socket,
-				    int _http_ms);
+				    char *_location_value, int _http_ms);
 
 /* GET functions */
 static int generate_and_send_get_request (int _fd_com_port, int _socket,
@@ -95,8 +95,8 @@ static int generate_and_send_get_request (int _fd_com_port, int _socket,
 					  uint32_t _uri_length,
 					  uint8_t _version, int _com_ms);
 static int receive_and_decode_get (int _fd_com_port, int _socket,
-				   const char *_filepath, uint32_t * _filesize,
-				   int _http_ms);
+				   const char *_filepath, char *_location_value,
+				   uint32_t *_filesize, int _http_ms);
 static int save_file (int _fd_com_port, int _socket, const char *_filepath,
 		      uint32_t _filesize, int _http_ms, char *_msg_buffer,
 		      int *_msg_size, int *_msg_idx, const int _max_msg_size);
@@ -501,7 +501,8 @@ send_file_data (int fd_com_port, int fd, int socket, int com_ms) {
 }
 
 static int
-receive_and_decode_post (int fd_com_port, int socket, int http_ms) {
+receive_and_decode_post (int fd_com_port, int socket, char *location_value,
+			 int http_ms) {
 	/*
 	 * HTTP/1.X YYY [response_text]\r\n
 	 * Header: Value\r\n ...
@@ -516,7 +517,8 @@ receive_and_decode_post (int fd_com_port, int socket, int http_ms) {
 	int result;
 	char length_name[15];
 	char length_value[17];
-	struct http_header headers[1];
+	char location_name[9];
+	struct http_header headers[2];
 	struct http_response response;
 	uint32_t discard_size;
 	int current_read_size;
@@ -529,7 +531,6 @@ receive_and_decode_post (int fd_com_port, int socket, int http_ms) {
 		  read_data (fd_com_port, socket, buff + buff_idx, 1, http_ms,
 			     msg_buffer, &msg_size, &msg_idx, MAX_BLOCK_SIZE);
 		if (result <= 0) {
-			++buff_idx;
 			break;
 		}
 		++buff_idx;
@@ -561,9 +562,13 @@ receive_and_decode_post (int fd_com_port, int socket, int http_ms) {
 	/* Fill header name and set to search for it */
 	strcpy (length_name, "Content-Length");
 	length_value[0] = '\0';
+	strcpy (location_name, "Location");
+	location_value[0] = '\0';
 	headers[0].name = length_name;
 	headers[0].value = length_value;
-	response.header_count = 1;
+	headers[1].name = location_name;
+	headers[1].value = location_value;
+	response.header_count = 2;
 	response.headers = headers;
 
 	result = decode_response (buff, &response, NULL);
@@ -671,7 +676,8 @@ generate_and_send_get_request (int fd_com_port, int socket, const char *host,
 
 static int
 receive_and_decode_get (int fd_com_port, int socket, const char *filepath,
-			uint32_t * filesize, int http_ms) {
+			char *location_value, uint32_t *filesize,
+			int http_ms) {
 	uint16_t buff_idx;
 	uint8_t buff[BUFFER_SIZE + 1];
 	char msg_buffer[MAX_BLOCK_SIZE];
@@ -680,7 +686,8 @@ receive_and_decode_get (int fd_com_port, int socket, const char *filepath,
 	int result;
 	char length_name[15];
 	char length_value[17];
-	struct http_header headers[1];
+	char location_name[9];
+	struct http_header headers[2];
 	struct http_response response;
 	uint32_t filesize_local;
 
@@ -711,9 +718,17 @@ receive_and_decode_get (int fd_com_port, int socket, const char *filepath,
 	/* Fill header name and set to search for it */
 	strcpy (length_name, "Content-Length");
 	length_value[0] = '\0';
+
+	strcpy (location_name, "Location");
+	location_value[0] = '\0';
+
 	headers[0].name = length_name;
 	headers[0].value = length_value;
-	response.header_count = 1;
+
+	headers[1].name = location_name;
+	headers[1].value = location_value;
+
+	response.header_count = 2;
 	response.headers = headers;
 
 	result = decode_response (buff, &response, NULL);
@@ -792,7 +807,7 @@ save_file (int fd_com_port, int socket, const char *filepath, uint32_t filesize,
 int
 upload_file (const char *com_port, const char *filepath, const char *form_name,
 	     const char *host, const char *port, const char *uri,
-	     int content_type, int com_ms, int http_ms) {
+	     char *next_location, int content_type, int com_ms, int http_ms) {
 	int error;
 	char boundary[BOUNDARY_DASH_COUNT + BOUNDARY_HEX_COUNT + 1];
 	int fd_com_port;
@@ -910,6 +925,17 @@ upload_file (const char *com_port, const char *filepath, const char *form_name,
 		return -1;
 	}
 
+	/* Looking for response when we're redirected */
+	error =
+	  receive_and_decode_post (fd_com_port, socket_descriptor,
+				   next_location, http_ms);
+	if (-1 != error) {
+		close_socket (fd_com_port, socket_descriptor, com_ms);
+		close (file_descriptor);
+		close_port (fd_com_port);
+		return error;
+	}
+
 	if (SHTTP_CONTTYPE_MULTIPART_FORMDATA == content_type) {
 		error =
 		  generate_and_send_post_content_header (fd_com_port,
@@ -954,7 +980,8 @@ upload_file (const char *com_port, const char *filepath, const char *form_name,
 
 	/* Response Receiving */
 	error =
-	  receive_and_decode_post (fd_com_port, socket_descriptor, http_ms);
+	  receive_and_decode_post (fd_com_port, socket_descriptor,
+				   next_location, http_ms);
 
 	/* Cleanup */
 	close_socket (fd_com_port, socket_descriptor, com_ms);
@@ -965,9 +992,9 @@ upload_file (const char *com_port, const char *filepath, const char *form_name,
 }
 
 int
-get_resource (const char *com_port, const char *filepath, uint32_t * filesize,
-	      const char *host, const char *port, const char *uri, int com_ms,
-	      int http_ms) {
+get_resource (const char *com_port, const char *filepath, uint32_t *filesize,
+	      const char *host, const char *port, const char *uri,
+	      char *next_location, int com_ms, int http_ms) {
 	int fd_com_port;
 	int socket;
 	int result;
@@ -986,6 +1013,9 @@ get_resource (const char *com_port, const char *filepath, uint32_t * filesize,
 		return -1;
 	}
 	if (NULL == uri) {
+		return -1;
+	}
+	if (NULL == next_location) {
 		return -1;
 	}
 
@@ -1021,8 +1051,8 @@ get_resource (const char *com_port, const char *filepath, uint32_t * filesize,
 
 	/* Response Receiving */
 	result =
-	  receive_and_decode_get (fd_com_port, socket, filepath, filesize,
-				  http_ms);
+	  receive_and_decode_get (fd_com_port, socket, filepath, next_location,
+				  filesize, http_ms);
 
 	/* Cleanup */
 	close_socket (fd_com_port, socket, com_ms);
